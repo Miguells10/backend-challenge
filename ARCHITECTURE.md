@@ -134,9 +134,30 @@ Representar dinheiro pela classe de domínio imutável `Money`, apoiada por `dec
 - Resultados internos negativos podem existir temporariamente para cálculos, como uma subtração ou negação; regras de wallet impedirão que saldo persistido se torne negativo.
 - A persistência futura usará `numeric(18,2)` no PostgreSQL e nunca converterá valores para `number`.
 
+## ADR-007: Wallet como dona do saldo materializado
+
+### Status
+
+Aceita.
+
+### Contexto
+
+O sistema precisa consultar saldo rapidamente, mas não pode permitir saldo negativo, moeda divergente ou atualização parcial do estado. Cada mudança de saldo também precisará gerar um lançamento auditável no ledger.
+
+### Decisão
+
+Modelar `Wallet` como aggregate root com saldo, moeda e versão encapsulados. Os métodos `credit` e `debit` validam a moeda e retornam um `WalletBalanceChange` com direção, saldo anterior, saldo posterior e nova versão. Débitos que deixariam o saldo negativo falham antes de alterar o estado.
+
+### Consequências
+
+- A versão começa em 1 e só é incrementada quando o saldo muda.
+- Uma movimentação de valor zero é rejeitada, pois não deve gerar lançamento no ledger.
+- A Wallet permanece independente de banco e filas; o caso de uso futuro fará a alteração da wallet e a criação do ledger na mesma transação SQL.
+- `rehydrate` reconstrói estado já persistido sem aplicar uma nova transição de negócio.
+
 ## Próximas decisões a registrar
 
-- Modelo de wallet, ledger imutável e reconciliação.
+- Ledger imutável e reconciliação.
 - Idempotency key e algoritmo de hash de payload canônico.
 - Estratégia de concorrência por wallet e constraints do banco.
 - Inbox, Outbox transacional, retries, referências pendentes e comportamento da DLQ.
