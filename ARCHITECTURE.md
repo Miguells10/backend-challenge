@@ -155,9 +155,29 @@ Modelar `Wallet` como aggregate root com saldo, moeda e versão encapsulados. Os
 - A Wallet permanece independente de banco e filas; o caso de uso futuro fará a alteração da wallet e a criação do ledger na mesma transação SQL.
 - `rehydrate` reconstrói estado já persistido sem aplicar uma nova transição de negócio.
 
+## ADR-008: Ledger imutável com evidência de saldo
+
+### Status
+
+Aceita.
+
+### Contexto
+
+O saldo atual da wallet responde quanto um jogador possui agora, mas sozinho não explica como aquele valor foi alcançado. O desafio exige um ledger imutável para auditoria e reconciliação financeira.
+
+### Decisão
+
+Representar cada movimentação por um `WalletLedgerEntry` com a carteira, a transação que a causou, direção (`CREDIT` ou `DEBIT`), valor movimentado, saldo anterior, saldo posterior e momento do lançamento. A entrada só pode ser criada se todas as moedas coincidirem, o valor for estritamente positivo, nenhum saldo for negativo e a aritmética estiver correta para a direção. A classe não expõe métodos de edição ou remoção.
+
+### Consequências
+
+- Um crédito precisa obedecer `saldo posterior = saldo anterior + valor`; um débito precisa obedecer `saldo posterior = saldo anterior - valor`.
+- Um lançamento fornece evidência suficiente para auditoria sem reconstruir o histórico inteiro.
+- Na persistência, uma migration acrescentará uma tabela append-only e o banco impedirá `UPDATE` e `DELETE`.
+- O caso de uso futuro criará a alteração de wallet e o lançamento de ledger na mesma transação SQL.
+
 ## Próximas decisões a registrar
 
-- Ledger imutável e reconciliação.
 - Idempotency key e algoritmo de hash de payload canônico.
 - Estratégia de concorrência por wallet e constraints do banco.
 - Inbox, Outbox transacional, retries, referências pendentes e comportamento da DLQ.

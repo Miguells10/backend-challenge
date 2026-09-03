@@ -49,6 +49,7 @@ describe('Money', () => {
     const negative = Money.from({ amount: '25.00', currency: 'BRL' }).negate();
 
     expect(zero.isZero()).toBe(true);
+    expect(zero.isPositive()).toBe(false);
     expect(negative.toString()).toBe('-25.00 BRL');
   });
 });
