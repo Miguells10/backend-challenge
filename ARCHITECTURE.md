@@ -176,6 +176,27 @@ Representar cada movimentação por um `WalletLedgerEntry` com a carteira, a tra
 - Na persistência, uma migration acrescentará uma tabela append-only e o banco impedirá `UPDATE` e `DELETE`.
 - O caso de uso futuro criará a alteração de wallet e o lançamento de ledger na mesma transação SQL.
 
+## ADR-009: Transação de wagering como máquina de estados
+
+### Status
+
+Aceita.
+
+### Contexto
+
+Uma mensagem de provedor não é apenas uma alteração de saldo: ela possui identidade externa, idempotência, tipo de operação, possível referência a outra operação e um ciclo de vida auditável. Mensagens podem chegar duplicadas ou fora de ordem.
+
+### Decisão
+
+Modelar `WagerTransaction` como a fonte de verdade para o ciclo de vida de `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`. Toda transação nasce em `PENDING`; uma reversão cuja referência ainda não chegou vai para `PENDING_REFERENCE`; `PROCESSED`, `REJECTED` e `FAILED` são terminais. `REFUND` e `ROLLBACK` exigem referência; `WIN` pode opcionalmente apontar para a `BET` da mesma rodada. A referência precisa pertencer ao mesmo provider, jogador, wallet, rodada, moeda e valor, e já estar processada.
+
+### Consequências
+
+- `BET` gera débito; `WIN`, `REFUND` e `OPENING` geram crédito; `LOSS` não altera saldo; `ROLLBACK` usa a direção inversa da transação referenciada.
+- As regras de tipo de referência impedem refund de uma vitória e rollback de uma operação sem efeito financeiro.
+- A classe conhece o `payloadHash`, mas a garantia de idempotência será concluída com índice único e consulta persistente no caso de uso.
+- `OPENING` permanece permitido no domínio para a criação interna da wallet; os adaptadores HTTP e SQS o bloquearão como entrada externa.
+
 ## Próximas decisões a registrar
 
 - Idempotency key e algoritmo de hash de payload canônico.
