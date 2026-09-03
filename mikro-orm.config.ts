@@ -6,6 +6,9 @@ export default defineConfig({
   clientUrl: databaseUrl,
   entities: ['dist/**/*.entity.js'],
   entitiesTs: ['src/**/*.entity.ts'],
+  discovery: {
+    warnWhenNoEntities: false,
+  },
   migrations: {
     path: 'dist/migrations',
     pathTs: 'src/migrations',

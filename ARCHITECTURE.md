@@ -113,9 +113,29 @@ Não criar um sistema local de usuário e senha. Introduzir uma `ProviderIdentit
 - Mensagens da fila são um canal interno confiável, mas seus provider IDs ainda passam por validação de domínio.
 - A autenticação pode ser adicionada depois sem alterar os casos de uso financeiros.
 
+## ADR-006: Valores monetários exatos e imutáveis
+
+### Status
+
+Aceita.
+
+### Contexto
+
+Valores monetários não podem usar `number`, pois a representação binária de ponto flutuante produz imprecisões, como `0.10 + 0.20` não resultar de forma confiável em `0.30`.
+
+### Decisão
+
+Representar dinheiro pela classe de domínio imutável `Money`, apoiada por `decimal.js`. Os contratos externos recebem e serializam valores como strings decimais não negativas com exatamente duas casas, por exemplo `"25.00"`. Operações entre moedas diferentes lançam erro de domínio.
+
+### Consequências
+
+- Cada operação retorna um novo `Money`; valores anteriores não são alterados.
+- Notação científica, negativos, valores sem duas casas e valores não finitos são rejeitados na entrada.
+- Resultados internos negativos podem existir temporariamente para cálculos, como uma subtração ou negação; regras de wallet impedirão que saldo persistido se torne negativo.
+- A persistência futura usará `numeric(18,2)` no PostgreSQL e nunca converterá valores para `number`.
+
 ## Próximas decisões a registrar
 
-- Representação exata de `Money` e validação de entrada.
 - Modelo de wallet, ledger imutável e reconciliação.
 - Idempotency key e algoritmo de hash de payload canônico.
 - Estratégia de concorrência por wallet e constraints do banco.
