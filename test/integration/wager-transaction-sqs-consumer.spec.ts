@@ -17,6 +17,7 @@ import mikroOrmConfig from '../../mikro-orm.config';
 
 const describeIntegration = process.env.RUN_INTEGRATION_TESTS === 'true' ? describe : describe.skip;
 const QUEUE_URL = process.env.WAGER_TRANSACTIONS_QUEUE_URL ?? '';
+const DLQ_URL = process.env.WAGER_TRANSACTIONS_DLQ_URL ?? '';
 const WALLET_ID = '00000000-0000-0000-0000-000000000101';
 const PLAYER_ID = '00000000-0000-0000-0000-000000000102';
 
@@ -56,7 +57,8 @@ describeIntegration('WagerTransactionSqsConsumer', () => {
       updatedAt: new Date('2026-09-04T20:00:00.000Z'),
     }));
     await testEm.flush();
-    await drainQueue(sqsClient);
+    await drainQueue(sqsClient, QUEUE_URL);
+    await drainQueue(sqsClient, DLQ_URL);
   });
 
   afterAll(async () => {
@@ -81,6 +83,41 @@ describeIntegration('WagerTransactionSqsConsumer', () => {
     expect(wallet.balanceAmount).toBe('75.00');
     expect(inboxMessages).toBe(1);
     expect(ledgerEntries).toBe(1);
+  });
+
+  test('moves an invalid message directly to the DLQ and acknowledges the source message', async () => {
+    const invalidMessageId = crypto.randomUUID();
+    const invalidBody = JSON.stringify({
+      messageId: invalidMessageId,
+      type: 'WagerTransactionRequested',
+      occurredAt: '2026-09-04T20:00:00.000Z',
+      data: {
+        providerId: 'provider-1',
+        externalTransactionId: 'external-invalid',
+        idempotencyKey: 'provider-1:external-invalid',
+        playerId: PLAYER_ID,
+        walletId: WALLET_ID,
+        roundId: 'round-1',
+        gameId: 'game-1',
+        kind: 'NOT_A_WAGER_KIND',
+        money: { amount: '25.00', currency: 'BRL' },
+      },
+    });
+    await sqsClient.send(new SendMessageCommand({
+      QueueUrl: QUEUE_URL,
+      MessageGroupId: WALLET_ID,
+      MessageDeduplicationId: invalidMessageId,
+      MessageBody: invalidBody,
+    }));
+
+    await consumer.pollOnce();
+
+    const deadLetter = await receiveOne(sqsClient, DLQ_URL);
+    const remainingSourceMessages = await receiveMessages(sqsClient, QUEUE_URL);
+
+    expect(deadLetter?.Body).toBe(invalidBody);
+    expect(deadLetter?.MessageAttributes?.failureCode?.StringValue).toBe('INVALID_WAGER_MESSAGE');
+    expect(remainingSourceMessages).toHaveLength(0);
   });
 
   async function sendRequestedTransaction(): Promise<void> {
@@ -108,14 +145,9 @@ describeIntegration('WagerTransactionSqsConsumer', () => {
   }
 });
 
-async function drainQueue(sqsClient: SQSClient): Promise<void> {
+async function drainQueue(sqsClient: SQSClient, queueUrl: string): Promise<void> {
   while (true) {
-    const response = await sqsClient.send(new ReceiveMessageCommand({
-      QueueUrl: QUEUE_URL,
-      MaxNumberOfMessages: 10,
-      WaitTimeSeconds: 0,
-    }));
-    const messages = response.Messages ?? [];
+    const messages = await receiveMessages(sqsClient, queueUrl);
 
     if (messages.length === 0) {
       return;
@@ -123,10 +155,24 @@ async function drainQueue(sqsClient: SQSClient): Promise<void> {
 
     await Promise.all(messages.map(async (message) => {
       if (message.ReceiptHandle !== undefined) {
-        await sqsClient.send(new DeleteMessageCommand({ QueueUrl: QUEUE_URL, ReceiptHandle: message.ReceiptHandle }));
+        await sqsClient.send(new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: message.ReceiptHandle }));
       }
     }));
   }
+}
+
+async function receiveOne(sqsClient: SQSClient, queueUrl: string) {
+  return (await receiveMessages(sqsClient, queueUrl, 1))[0];
+}
+
+async function receiveMessages(sqsClient: SQSClient, queueUrl: string, waitTimeSeconds = 0) {
+  const response = await sqsClient.send(new ReceiveMessageCommand({
+    QueueUrl: queueUrl,
+    MaxNumberOfMessages: 10,
+    WaitTimeSeconds: waitTimeSeconds,
+    MessageAttributeNames: ['All'],
+  }));
+  return response.Messages ?? [];
 }
 
 function requiredEnvironment(name: string): string {

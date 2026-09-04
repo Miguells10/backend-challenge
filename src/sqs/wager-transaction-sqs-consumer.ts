@@ -1,4 +1,10 @@
-import { DeleteMessageCommand, ReceiveMessageCommand, type Message, type SQSClient } from '@aws-sdk/client-sqs';
+import {
+  DeleteMessageCommand,
+  ReceiveMessageCommand,
+  SendMessageCommand,
+  type Message,
+  type SQSClient,
+} from '@aws-sdk/client-sqs';
 import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
 import { Inject, Injectable } from '@nestjs/common';
 
@@ -8,7 +14,7 @@ import {
   type ProcessWagerTransactionCommand,
 } from '../application/wagering/process-wager-transaction.use-case';
 import { InboxMessage } from '../domain/messaging/inbox-message';
-import { Money, type MoneyProps } from '../domain/money/money';
+import { Money, MoneyValidationError, type MoneyProps } from '../domain/money/money';
 import { WagerTransactionKind } from '../domain/wagering/wager-transaction';
 import { InboxMessageEntitySchema, type InboxMessageEntity } from '../infrastructure/persistence/entities/inbox-message.entity';
 
@@ -44,6 +50,7 @@ export class WagerTransactionSqsConsumer {
   public static readonly consumerName = 'wager-transaction-consumer';
 
   private readonly queueUrl: string;
+  private readonly deadLetterQueueUrl: string;
 
   public constructor(
     private readonly orm: MikroORM,
@@ -51,6 +58,7 @@ export class WagerTransactionSqsConsumer {
     @Inject(SQS_CLIENT) private readonly sqsClient: SQSClient,
   ) {
     this.queueUrl = requiredEnvironment('WAGER_TRANSACTIONS_QUEUE_URL');
+    this.deadLetterQueueUrl = requiredEnvironment('WAGER_TRANSACTIONS_DLQ_URL');
   }
 
   public async pollOnce(): Promise<number> {
@@ -67,16 +75,53 @@ export class WagerTransactionSqsConsumer {
   }
 
   public async consume(message: Message): Promise<void> {
-    const requested = parseRequestedMessage(message.Body);
-    await this.commitMessage(requested);
-
-    if (message.ReceiptHandle === undefined) {
+    const receiptHandle = message.ReceiptHandle;
+    if (receiptHandle === undefined) {
       throw new InvalidSqsWagerMessageError('SQS message does not include a receipt handle.');
     }
 
+    try {
+      const requested = parseRequestedMessage(message.Body);
+      await this.commitMessage(requested);
+    } catch (error) {
+      if (!(error instanceof InvalidSqsWagerMessageError)) {
+        throw error;
+      }
+
+      await this.moveInvalidMessageToDeadLetterQueue(message, error);
+      await this.deleteSourceMessage(receiptHandle);
+      return;
+    }
+
+    await this.deleteSourceMessage(receiptHandle);
+  }
+
+  private async deleteSourceMessage(receiptHandle: string): Promise<void> {
     await this.sqsClient.send(new DeleteMessageCommand({
       QueueUrl: this.queueUrl,
-      ReceiptHandle: message.ReceiptHandle,
+      ReceiptHandle: receiptHandle,
+    }));
+  }
+
+  private async moveInvalidMessageToDeadLetterQueue(
+    message: Message,
+    error: InvalidSqsWagerMessageError,
+  ): Promise<void> {
+    await this.sqsClient.send(new SendMessageCommand({
+      QueueUrl: this.deadLetterQueueUrl,
+      MessageBody: message.Body ?? JSON.stringify({ type: 'InvalidWagerMessage', reason: error.message }),
+      MessageGroupId: 'invalid-wager-messages',
+      MessageDeduplicationId: message.MessageId ?? crypto.randomUUID(),
+      MessageAttributes: {
+        failureCode: { DataType: 'String', StringValue: 'INVALID_WAGER_MESSAGE' },
+        failureReason: { DataType: 'String', StringValue: error.message },
+        sourceMessageId: { DataType: 'String', StringValue: message.MessageId ?? 'unknown' },
+      },
+    }));
+    console.error(JSON.stringify({
+      event: 'wager_message_moved_to_dlq',
+      messageId: message.MessageId,
+      failureCode: 'INVALID_WAGER_MESSAGE',
     }));
   }
 
@@ -163,10 +208,21 @@ function toCommand(message: WagerTransactionRequestedMessage): ProcessWagerTrans
     roundId: message.data.roundId,
     gameId: message.data.gameId,
     kind,
-    money: Money.from(message.data.money),
+    money: parseMoney(message.data.money),
     referenceExternalTransactionId: message.data.referenceExternalTransactionId,
     occurredAt,
   };
+}
+
+function parseMoney(money: MoneyProps): Money {
+  try {
+    return Money.from(money);
+  } catch (error) {
+    if (error instanceof MoneyValidationError) {
+      throw new InvalidSqsWagerMessageError(error.message);
+    }
+    throw error;
+  }
 }
 
 function parseRequestedMessage(body: string | undefined): WagerTransactionRequestedMessage {

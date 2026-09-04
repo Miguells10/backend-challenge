@@ -285,7 +285,7 @@ Executar o consumer como processo separado (`bun run start:worker`), escalável 
 
 - Se o processo cair antes do commit, SQS redeliverá a mensagem e nenhum efeito financeiro terá sido persistido.
 - Se cair depois do commit e antes do ack, SQS redeliverá, a inbox impedirá um segundo débito e o novo worker apenas dará ack.
-- Erros de payload ou infraestrutura ainda voltam para a fila nesta etapa; a classificação explícita de retry e DLQ será implementada no próximo incremento.
+- Erros permanentes de payload são encaminhados imediatamente para a DLQ; falhas de infraestrutura continuam sem ack para que o SQS tente novamente e aplique sua redrive policy ao exceder o limite.
 - O worker não é iniciado por padrão no Compose. Ele pode ser escalado com `docker compose --profile worker up --scale worker=3` sem criar outro serviço de domínio.
 
 ## ADR-014: Publisher concorrente da outbox com SKIP LOCKED
@@ -331,3 +331,23 @@ Os valores operacionais são uma única política configurável por ambiente, va
 - `reference_attempts` preserva o histórico operacional; o índice parcial cobre apenas a fila de pendências consultada pelo worker.
 - A atualização de agendamento, a rejeição terminal ou a alteração de saldo sempre usam a mesma conexão da transação que obteve o lock. Isso evita que uma conexão espere pelo lock da própria transação.
 - O processo é iniciado pelo perfil `reference-reprocessor` do Docker Compose. Em alto volume, o lote e a estratégia de claim/lease podem evoluir sem mudar a máquina de estados.
+
+## ADR-016: Classificação de falhas do consumer e DLQ explícita
+
+### Status
+
+Aceita.
+
+### Contexto
+
+Uma mensagem com JSON inválido, tipo desconhecido ou valor monetário malformado nunca se tornará válida por uma nova tentativa. Já indisponibilidade do PostgreSQL, LocalStack ou uma falha no envio para a DLQ pode ser temporária. Tratar ambos os casos do mesmo modo congestiona a fila ou perde material de diagnóstico.
+
+### Decisão
+
+O consumer separa erros permanentes de payload (`InvalidSqsWagerMessageError`) dos demais. Para um payload inválido, preserva o corpo original e envia uma cópia à `wager-transactions-dlq.fifo` com atributos de motivo e identificador de origem; só depois confirma a mensagem da fila principal. Qualquer outra exceção não recebe ack. O SQS a entrega novamente e a redrive policy existente move a mensagem para a mesma DLQ após cinco recebimentos sem sucesso.
+
+### Consequências
+
+- Uma mensagem claramente inválida não ocupa cinco ciclos inúteis de retry e fica disponível para investigação sem que o log exponha o payload financeiro.
+- Se o envio para a DLQ falhar, a origem não é confirmada e poderá ser tentada novamente; a deduplicação FIFO reduz duplicatas nessa janela.
+- Rejeições financeiras normais, como saldo insuficiente, não seguem para a DLQ: o caso de uso persiste `REJECTED`, conclui a inbox e recebe ack como processamento bem-sucedido.
