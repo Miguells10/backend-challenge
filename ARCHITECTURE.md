@@ -266,3 +266,24 @@ Criar `inbox_messages` com unicidade por `(consumer_name, message_id)` para que 
 - A outbox aceita aggregates diferentes: `WagerTransactionProcessed` pertence à transação, enquanto `WalletBalanceChanged` pertence à wallet. Por isso `aggregate_id` é indexável, mas não tem chave estrangeira para uma única tabela.
 - A publicação continuará sendo ao menos uma vez; consumidores precisam usar event id ou inbox para tolerar uma eventual publicação duplicada.
 - Nesta etapa a inbox ainda não é preenchida, pois isso pertence ao worker SQS. Sua tabela e regras já existem para evitar que a deduplicação seja uma decisão tardia.
+
+## ADR-013: Consumer SQS com inbox no mesmo commit financeiro
+
+### Status
+
+Aceita.
+
+### Contexto
+
+O SQS pode redeliver a mesma mensagem, inclusive depois de um crash entre o commit do banco e o `DeleteMessage`. A deduplicação precisa ser compartilhada por todos os workers e não pode ser confirmada em uma transação separada da movimentação financeira.
+
+### Decisão
+
+Executar o consumer como processo separado (`bun run start:worker`), escalável pelo perfil `worker` do Docker Compose. Para cada mensagem, ele abre uma transação SQL, registra a inbox, reutiliza o caso de uso financeiro com o mesmo `EntityManager`, marca a inbox como processada e faz commit. Só após o commit o consumer envia `DeleteMessage` ao SQS. A chave única da inbox por consumidor e message id trata redelivery; uma colisão concorrente é tratada como duplicata já confirmada.
+
+### Consequências
+
+- Se o processo cair antes do commit, SQS redeliverá a mensagem e nenhum efeito financeiro terá sido persistido.
+- Se cair depois do commit e antes do ack, SQS redeliverá, a inbox impedirá um segundo débito e o novo worker apenas dará ack.
+- Erros de payload ou infraestrutura ainda voltam para a fila nesta etapa; a classificação explícita de retry e DLQ será implementada no próximo incremento.
+- O worker não é iniciado por padrão no Compose. Ele pode ser escalado com `docker compose --profile worker up --scale worker=3` sem criar outro serviço de domínio.

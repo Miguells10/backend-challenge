@@ -1,5 +1,6 @@
 import { LockMode } from '@mikro-orm/core';
 import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
+import { Injectable } from '@nestjs/common';
 
 import { Money } from '../../domain/money/money';
 import { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
@@ -70,11 +71,19 @@ export class IdempotencyConflictError extends Error {
   }
 }
 
+@Injectable()
 export class ProcessWagerTransactionUseCase {
   public constructor(private readonly orm: MikroORM) {}
 
   public async execute(command: ProcessWagerTransactionCommand): Promise<ProcessWagerTransactionResult> {
-    return this.orm.em.fork().transactional((em) => this.process(em, command), { clear: true });
+    return this.orm.em.fork().transactional((em) => this.executeInTransaction(em, command), { clear: true });
+  }
+
+  public async executeInTransaction(
+    em: EntityManager,
+    command: ProcessWagerTransactionCommand,
+  ): Promise<ProcessWagerTransactionResult> {
+    return this.process(em, command);
   }
 
   private async process(
