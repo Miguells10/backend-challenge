@@ -3,6 +3,13 @@ import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
 import { Money } from '../../domain/money/money';
 import { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
+import { OutboxMessage } from '../../domain/messaging/outbox-message';
+import {
+  WalletBalanceChanged,
+  WagerTransactionPendingReference,
+  WagerTransactionProcessed,
+  WagerTransactionRejected,
+} from '../../domain/messaging/wager-events';
 import { InsufficientFundsError, Wallet } from '../../domain/wallet/wallet';
 import {
   InvalidTransactionReferenceError,
@@ -16,6 +23,10 @@ import {
   type WalletLedgerEntryEntity,
 } from '../../infrastructure/persistence/entities/wallet-ledger-entry.entity';
 import { WalletEntitySchema, type WalletEntity } from '../../infrastructure/persistence/entities/wallet.entity';
+import {
+  OutboxMessageEntitySchema,
+  type OutboxMessageEntity,
+} from '../../infrastructure/persistence/entities/outbox-message.entity';
 import {
   WagerTransactionEntitySchema,
   type WagerTransactionEntity,
@@ -155,7 +166,11 @@ export class ProcessWagerTransactionUseCase {
       em.persist(this.toTransactionEntity(em, transaction, wallet.balance));
       await em.flush();
 
-      em.persist(this.toLedgerEntryEntity(em, entry));
+      const outboxMessages = this.createOutboxMessages(transaction, wallet.balance, wallet, entry);
+      em.persist([
+        this.toLedgerEntryEntity(em, entry),
+        ...outboxMessages.map((message) => this.toOutboxMessageEntity(em, message)),
+      ]);
       await em.flush();
 
       return this.result(transaction, wallet.balance, false);
@@ -208,7 +223,49 @@ export class ProcessWagerTransactionUseCase {
   ): Promise<ProcessWagerTransactionResult> {
     em.persist(this.toTransactionEntity(em, transaction, balance));
     await em.flush();
+
+    const outboxMessages = this.createOutboxMessages(transaction, balance);
+    em.persist(outboxMessages.map((message) => this.toOutboxMessageEntity(em, message)));
+    await em.flush();
+
     return this.result(transaction, balance, false);
+  }
+
+  private createOutboxMessages(
+    transaction: WagerTransaction,
+    balance: Money,
+    wallet?: Wallet,
+    entry?: WalletLedgerEntry,
+  ): OutboxMessage[] {
+    const context = { correlationId: transaction.id };
+    const event = this.transactionEvent(transaction, balance, context);
+    const messages = [OutboxMessage.enqueue({ id: crypto.randomUUID(), event })];
+
+    if (wallet !== undefined && entry !== undefined) {
+      messages.push(OutboxMessage.enqueue({
+        id: crypto.randomUUID(),
+        event: WalletBalanceChanged.from(wallet, entry, context),
+      }));
+    }
+
+    return messages;
+  }
+
+  private transactionEvent(
+    transaction: WagerTransaction,
+    balance: Money,
+    context: { correlationId: string },
+  ): WagerTransactionProcessed | WagerTransactionRejected | WagerTransactionPendingReference {
+    switch (transaction.status) {
+      case WagerTransactionStatus.Processed:
+        return WagerTransactionProcessed.from(transaction, balance, context);
+      case WagerTransactionStatus.Rejected:
+        return WagerTransactionRejected.from(transaction, balance, context);
+      case WagerTransactionStatus.PendingReference:
+        return WagerTransactionPendingReference.from(transaction, balance, context);
+      default:
+        throw new Error(`Cannot enqueue an event for a transaction in ${transaction.status} status.`);
+    }
   }
 
   private replay(entity: WagerTransactionEntity, payloadHash: string): ProcessWagerTransactionResult {
@@ -316,6 +373,19 @@ export class ProcessWagerTransactionUseCase {
       balanceBefore: entry.balanceBefore.toJSON().amount,
       balanceAfter: entry.balanceAfter.toJSON().amount,
       createdAt: entry.createdAt,
+    });
+  }
+
+  private toOutboxMessageEntity(em: EntityManager, message: OutboxMessage): OutboxMessageEntity {
+    return em.create(OutboxMessageEntitySchema, {
+      id: message.id,
+      aggregateId: message.aggregateId,
+      eventType: message.eventType,
+      payload: message.payload,
+      occurredAt: message.occurredAt,
+      attempts: message.attempts,
+      nextAttemptAt: message.nextAttemptAt,
+      publishedAt: message.publishedAt,
     });
   }
 }

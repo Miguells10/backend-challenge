@@ -245,3 +245,24 @@ O caso de uso financeiro executa em uma única transação SQL. Depois de uma pr
 - A segunda consulta de idempotência depois do lock evita que duas requisições concorrentes da mesma wallet apliquem a mesma operação duas vezes. O índice único permanece como proteção final no banco.
 - A versão da wallet continua sendo evidência de quantas alterações de saldo ocorreram, mas a exclusão mútua deste fluxo vem do lock pessimista, não de uma tentativa otimista do ORM.
 - Uma wallet muito movimentada pode ter pequenas esperas entre operações concorrentes, uma escolha deliberada para priorizar correção financeira neste desafio.
+
+## ADR-012: Inbox persistente e transactional outbox
+
+### Status
+
+Aceita.
+
+### Contexto
+
+O SQS entrega mensagens pelo menos uma vez e a aplicação pode morrer depois de confirmar uma alteração financeira, mas antes de publicar o evento correspondente. Depender apenas da memória do processo ou publicar diretamente antes do commit causaria duplicidade ou perda de eventos.
+
+### Decisão
+
+Criar `inbox_messages` com unicidade por `(consumer_name, message_id)` para que o futuro worker reconheça redeliveries. Criar `outbox_messages` com envelope JSON versionado, tentativas, próximo agendamento e marca de publicação. O caso de uso já grava os eventos de transação e de mudança de saldo na outbox na mesma transação SQL de wallet, wager transaction e ledger. O publisher SQS será um processo posterior que selecionará apenas mensagens pendentes.
+
+### Consequências
+
+- Um commit financeiro não pode existir sem seus eventos pendentes; se o processo morrer, outro publisher poderá enviá-los depois.
+- A outbox aceita aggregates diferentes: `WagerTransactionProcessed` pertence à transação, enquanto `WalletBalanceChanged` pertence à wallet. Por isso `aggregate_id` é indexável, mas não tem chave estrangeira para uma única tabela.
+- A publicação continuará sendo ao menos uma vez; consumidores precisam usar event id ou inbox para tolerar uma eventual publicação duplicada.
+- Nesta etapa a inbox ainda não é preenchida, pois isso pertence ao worker SQS. Sua tabela e regras já existem para evitar que a deduplicação seja uma decisão tardia.

@@ -14,6 +14,7 @@ import {
 } from '../../src/application/wagering/process-wager-transaction.use-case';
 import { WalletLedgerEntryEntitySchema } from '../../src/infrastructure/persistence/entities/wallet-ledger-entry.entity';
 import { WalletEntitySchema } from '../../src/infrastructure/persistence/entities/wallet.entity';
+import { OutboxMessageEntitySchema } from '../../src/infrastructure/persistence/entities/outbox-message.entity';
 import { WagerTransactionEntitySchema } from '../../src/infrastructure/persistence/entities/wager-transaction.entity';
 import mikroOrmConfig from '../../mikro-orm.config';
 
@@ -33,7 +34,7 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
 
   beforeEach(async () => {
     testEm = orm.em.fork();
-    await testEm.getConnection().execute('truncate table wallet_ledger_entries, wager_transactions, wallets cascade');
+    await testEm.getConnection().execute('truncate table outbox_messages, inbox_messages, wallet_ledger_entries, wager_transactions, wallets cascade');
     testEm.persist(
       testEm.create(WalletEntitySchema, {
         id: WALLET_ID,
@@ -58,6 +59,7 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
 
     const wallet = await testEm.findOneOrFail(WalletEntitySchema, WALLET_ID);
     const ledgerEntries = await testEm.find(WalletLedgerEntryEntitySchema, { walletId: WALLET_ID });
+    const outboxMessages = await testEm.find(OutboxMessageEntitySchema, {});
 
     expect(result.status).toBe(WagerTransactionStatus.Processed);
     expect(result.balance.toString()).toBe('75.00 BRL');
@@ -65,6 +67,10 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
     expect(wallet.version).toBe(2);
     expect(ledgerEntries).toHaveLength(1);
     expect(ledgerEntries[0]?.direction).toBe('DEBIT');
+    expect(outboxMessages.map((message) => message.eventType).sort()).toEqual([
+      'WagerTransactionProcessed',
+      'WalletBalanceChanged',
+    ]);
   });
 
   test('persists a rejection without changing the wallet or creating ledger', async () => {
@@ -73,11 +79,13 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
 
     const wallet = await testEm.findOneOrFail(WalletEntitySchema, WALLET_ID);
     const ledgerEntries = await testEm.count(WalletLedgerEntryEntitySchema, { walletId: WALLET_ID });
+    const outboxMessages = await testEm.find(OutboxMessageEntitySchema, { aggregateId: result.transactionId });
 
     expect(result.status).toBe(WagerTransactionStatus.Rejected);
     expect(result.failureCode).toBe(WagerFailureCode.InsufficientFunds);
     expect(wallet.balanceAmount).toBe('100.00');
     expect(ledgerEntries).toBe(0);
+    expect(outboxMessages.map((message) => message.eventType)).toEqual(['WagerTransactionRejected']);
   });
 
   test('replays an identical idempotency key without creating a second debit', async () => {
@@ -116,10 +124,12 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
 
     const wallet = await testEm.findOneOrFail(WalletEntitySchema, WALLET_ID);
     const ledgerEntries = await testEm.count(WalletLedgerEntryEntitySchema, { walletId: WALLET_ID });
+    const outboxMessages = await testEm.find(OutboxMessageEntitySchema, { aggregateId: result.transactionId });
 
     expect(result.status).toBe(WagerTransactionStatus.PendingReference);
     expect(wallet.balanceAmount).toBe('100.00');
     expect(ledgerEntries).toBe(0);
+    expect(outboxMessages.map((message) => message.eventType)).toEqual(['WagerTransactionPendingReference']);
   });
 });
 
