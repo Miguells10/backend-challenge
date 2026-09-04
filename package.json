@@ -8,6 +8,7 @@
     "start": "bun run src/main.ts",
     "start:dev": "bun --watch src/main.ts",
     "start:worker": "bun run src/worker.ts",
+    "start:publisher": "bun run src/publisher.ts",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

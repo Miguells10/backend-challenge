@@ -38,6 +38,7 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       WAGER_TRANSACTIONS_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+      WAGER_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events.fifo
     ports:
       - "3000:3000"
     depends_on:
@@ -57,6 +58,25 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       WAGER_TRANSACTIONS_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+      WAGER_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events.fifo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+  publisher:
+    build: .
+    command: bun run start:publisher
+    profiles: ["publisher"]
+    environment:
+      DATABASE_URL: postgresql://wagering:wagering@postgres:5432/wagering
+      SQS_ENDPOINT: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      WAGER_TRANSACTIONS_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+      WAGER_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events.fifo
     depends_on:
       postgres:
         condition: service_healthy

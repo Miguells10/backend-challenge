@@ -287,3 +287,24 @@ Executar o consumer como processo separado (`bun run start:worker`), escalável 
 - Se cair depois do commit e antes do ack, SQS redeliverá, a inbox impedirá um segundo débito e o novo worker apenas dará ack.
 - Erros de payload ou infraestrutura ainda voltam para a fila nesta etapa; a classificação explícita de retry e DLQ será implementada no próximo incremento.
 - O worker não é iniciado por padrão no Compose. Ele pode ser escalado com `docker compose --profile worker up --scale worker=3` sem criar outro serviço de domínio.
+
+## ADR-014: Publisher concorrente da outbox com SKIP LOCKED
+
+### Status
+
+Aceita.
+
+### Contexto
+
+Vários publishers podem buscar eventos pendentes simultaneamente. Uma consulta comum permite que dois processos escolham a mesma mensagem antes de algum deles a marque como publicada. Também não podemos perder o evento se o envio ao SQS falhar.
+
+### Decisão
+
+Cada publisher seleciona um único evento pendente dentro de transação SQL usando `FOR UPDATE SKIP LOCKED`. A linha fica bloqueada enquanto o publisher envia o envelope ao SQS FIFO; em sucesso registra `published_at`, em erro incrementa `attempts` e usa o backoff exponencial já definido por `OutboxMessage`. O `eventId` é usado como `MessageDeduplicationId` e o `aggregateId` como `MessageGroupId`.
+
+### Consequências
+
+- Dois publishers concorrentes trabalham em eventos diferentes sem coordenador externo; um teste real com dois publishers verifica esse caso.
+- Se houver falha entre enviar ao SQS e registrar `published_at`, pode ocorrer nova publicação. Isso é seguro porque os consumidores continuam idempotentes e o event id também ajuda a janela de deduplicação da FIFO.
+- O lock fica aberto durante uma chamada de rede curta. É um trade-off explícito e adequado ao timebox; uma evolução para alto volume seria adicionar lease/claim persistente para não manter a transação durante o envio.
+- O publisher é outro processo escalável, iniciado com o perfil `publisher` do Docker Compose.
