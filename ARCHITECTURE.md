@@ -351,3 +351,46 @@ O consumer separa erros permanentes de payload (`InvalidSqsWagerMessageError`) d
 - Uma mensagem claramente inválida não ocupa cinco ciclos inúteis de retry e fica disponível para investigação sem que o log exponha o payload financeiro.
 - Se o envio para a DLQ falhar, a origem não é confirmada e poderá ser tentada novamente; a deduplicação FIFO reduz duplicatas nessa janela.
 - Rejeições financeiras normais, como saldo insuficiente, não seguem para a DLQ: o caso de uso persiste `REJECTED`, conclui a inbox e recebe ack como processamento bem-sucedido.
+
+## ADR-017: API REST como adaptador fino do núcleo financeiro
+
+### Status
+
+Aceita.
+
+### Contexto
+
+O desafio exige uma API HTTP e Swagger, mas as regras financeiras já estão concentradas nos casos de uso e no domínio. Duplicar cálculos de saldo, idempotência ou validação de referência nos controllers criaria divergência entre HTTP e SQS.
+
+### Decisão
+
+Expor uma API REST com criação e consulta de wallet, submissão de wagering e consultas de transação. Controllers validam o contrato HTTP, calculam o hash canônico da entrada e delegam ao mesmo `ProcessWagerTransactionUseCase` usado pelo consumer SQS. A criação com saldo inicial persiste wallet, transação interna `OPENING`, ledger e outbox em uma única transação SQL. Swagger é gerado a partir dos decorators Nest.
+
+### Consequências
+
+- Uma BET enviada por HTTP ou SQS segue as mesmas regras de idempotência, lock e ledger.
+- `PENDING_REFERENCE` retorna `202 Accepted`; os demais resultados financeiros retornam o status de domínio no corpo da resposta.
+- Consultas expõem dados persistidos sem reexecutar regras de negócio. Paginação de ledger e reconciliação permanecem a próxima fatia da API.
+
+## ADR-018: DTOs HTTP, casos de uso de consulta e repositórios específicos
+
+### Status
+
+Aceita.
+
+### Contexto
+
+Os controllers HTTP precisam validar o formato da requisição, mas não devem conhecer `MikroORM` nem os schemas de persistência. Ao mesmo tempo, a transação financeira de wagering depende de lock pessimista, ledger e outbox no mesmo `EntityManager`; empurrar essa orquestração para um repositório genérico esconderia uma regra crítica.
+
+### Decisão
+
+DTOs ficam em arquivos próprios por contrato HTTP. Consultas de wallet e transação usam casos de uso dedicados que dependem de interfaces de repositório. As implementações `MikroOrm*Repository` isolam os schemas e o ORM na infraestrutura. Controllers recebem DTOs e chamam casos de uso; não acessam banco diretamente.
+
+`CreateWalletUseCase` e `ProcessWagerTransactionUseCase` continuam donos das transações de escrita financeira. Eles são serviços de aplicação orientados a ação, por isso recebem o nome de caso de uso em vez de um `Service` genérico.
+
+### Consequências
+
+- O contrato HTTP, a leitura persistida e a regra financeira podem evoluir e ser testados separadamente.
+- Uma troca de biblioteca de persistência fica limitada aos adaptadores de repositório das consultas.
+- Não há `BaseRepository` genérico: cada interface representa apenas as consultas que seu módulo realmente precisa.
+- O acoplamento técnico residual dos casos de uso de escrita ao `EntityManager` é intencional neste desafio, pois preserva a atomicidade entre saldo, ledger, inbox/outbox e locks.

@@ -118,6 +118,9 @@ describeIntegration('WagerTransactionSqsConsumer', () => {
     expect(deadLetter?.Body).toBe(invalidBody);
     expect(deadLetter?.MessageAttributes?.failureCode?.StringValue).toBe('INVALID_WAGER_MESSAGE');
     expect(remainingSourceMessages).toHaveLength(0);
+    if (deadLetter?.ReceiptHandle !== undefined) {
+      await sqsClient.send(new DeleteMessageCommand({ QueueUrl: DLQ_URL, ReceiptHandle: deadLetter.ReceiptHandle }));
+    }
   });
 
   async function sendRequestedTransaction(): Promise<void> {

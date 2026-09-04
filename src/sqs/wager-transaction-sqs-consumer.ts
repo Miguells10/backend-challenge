@@ -110,7 +110,7 @@ export class WagerTransactionSqsConsumer {
     await this.sqsClient.send(new SendMessageCommand({
       QueueUrl: this.deadLetterQueueUrl,
       MessageBody: message.Body ?? JSON.stringify({ type: 'InvalidWagerMessage', reason: error.message }),
-      MessageGroupId: 'invalid-wager-messages',
+      MessageGroupId: message.MessageId ?? 'invalid-wager-message',
       MessageDeduplicationId: message.MessageId ?? crypto.randomUUID(),
       MessageAttributes: {
         failureCode: { DataType: 'String', StringValue: 'INVALID_WAGER_MESSAGE' },
