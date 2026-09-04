@@ -197,6 +197,27 @@ Modelar `WagerTransaction` como a fonte de verdade para o ciclo de vida de `OPEN
 - A classe conhece o `payloadHash`, mas a garantia de idempotência será concluída com índice único e consulta persistente no caso de uso.
 - `OPENING` permanece permitido no domínio para a criação interna da wallet; os adaptadores HTTP e SQS o bloquearão como entrada externa.
 
+## ADR-010: Schema financeiro como última linha de defesa
+
+### Status
+
+Aceita.
+
+### Contexto
+
+Validações no domínio tornam regras legíveis, mas não protegem contra bugs de aplicação, acesso concorrente de múltiplas instâncias ou escrita direta no banco. O desafio exige que unicidade, não negatividade e imutabilidade também sejam garantidas pelo schema PostgreSQL.
+
+### Decisão
+
+Mapear a persistência com `EntitySchema` do MikroORM, mantendo classes de domínio livres de decorators. A migration inicial cria `wallets`, `wager_transactions` e `wallet_ledger_entries` com valores `numeric(18,2)`, timestamps com timezone, chaves estrangeiras e índices orientados às consultas previstas. O banco aplica unicidade de wallet e idempotência, contexto comum entre wallet/transação/ledger, valores e saldos válidos, e aritmética do ledger. Triggers bloqueiam `UPDATE` e `DELETE` em lançamentos do ledger e exigem uma transação processada que afete saldo, com direção coerente para os tipos não ambíguos.
+
+### Consequências
+
+- Uma tentativa de gravar ledger cuja conta não fecha falha mesmo que o chamador ignore as classes de domínio.
+- Uma transação não pode apontar para wallet, jogador ou moeda incompatíveis; um ledger também não pode ser associado a uma wallet diferente da sua transação.
+- O modelo de persistência pode evoluir sem contaminar `Money`, `Wallet`, `WagerTransaction` ou `WalletLedgerEntry` com detalhes do ORM.
+- Inbox, outbox e a estratégia de lock por wallet entrarão em migrations posteriores, antes do caso de uso financeiro distribuído.
+
 ## Próximas decisões a registrar
 
 - Idempotency key e algoritmo de hash de payload canônico.
