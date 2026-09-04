@@ -224,3 +224,24 @@ Mapear a persistência com `EntitySchema` do MikroORM, mantendo classes de domí
 - Estratégia de concorrência por wallet e constraints do banco.
 - Inbox, Outbox transacional, retries, referências pendentes e comportamento da DLQ.
 - Mapeamento de erros HTTP, logs estruturados, métricas e estratégia de testes.
+
+## ADR-011: Transação SQL e lock pessimista por wallet
+
+### Status
+
+Aceita.
+
+### Contexto
+
+Dois pedidos podem tentar movimentar a mesma carteira quase ao mesmo tempo. Se ambos lessem o mesmo saldo antes de gravar, poderiam aprovar débitos que, juntos, deixam o jogador com saldo negativo. Também precisamos garantir que a alteração de saldo, a transação de wagering e o ledger não existam parcialmente.
+
+### Decisão
+
+O caso de uso financeiro executa em uma única transação SQL. Depois de uma primeira consulta rápida por idempotency key, ele obtém a wallet com lock pessimista de escrita (`FOR UPDATE`) e consulta a chave novamente. Assim, operações para a mesma carteira são serializadas, enquanto carteiras diferentes continuam independentes. A wallet, a `WagerTransaction` e seu `WalletLedgerEntry` são gravados antes do commit da mesma transação; o ledger é enviado ao banco depois da transação porque sua chave estrangeira exige que ela já exista.
+
+### Consequências
+
+- Se falhar a criação do ledger, também são desfeitos o saldo e a transação de wagering; o primeiro `flush` ainda não é um commit.
+- A segunda consulta de idempotência depois do lock evita que duas requisições concorrentes da mesma wallet apliquem a mesma operação duas vezes. O índice único permanece como proteção final no banco.
+- A versão da wallet continua sendo evidência de quantas alterações de saldo ocorreram, mas a exclusão mútua deste fluxo vem do lock pessimista, não de uma tentativa otimista do ORM.
+- Uma wallet muito movimentada pode ter pequenas esperas entre operações concorrentes, uma escolha deliberada para priorizar correção financeira neste desafio.

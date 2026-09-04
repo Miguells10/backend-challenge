@@ -37,6 +37,7 @@ export class Migration2026090319000 extends Migration {
         "reference_transaction_id" uuid null,
         "status" varchar(20) not null,
         "failure_code" varchar(64) null,
+        "result_balance_amount" numeric(18,2) null,
         "created_at" timestamptz not null,
         "processed_at" timestamptz null,
         constraint "wager_transactions_pkey" primary key ("id"),
@@ -49,7 +50,8 @@ export class Migration2026090319000 extends Migration {
         constraint "wager_transactions_amount_positive_check" check ("amount" > 0),
         constraint "wager_transactions_kind_check" check ("kind" in ('OPENING', 'BET', 'WIN', 'LOSS', 'REFUND', 'ROLLBACK')),
         constraint "wager_transactions_status_check" check ("status" in ('PENDING', 'PENDING_REFERENCE', 'PROCESSED', 'REJECTED', 'FAILED')),
-        constraint "wager_transactions_failure_code_check" check ("failure_code" is null or "failure_code" in ('INSUFFICIENT_FUNDS', 'REFERENCE_NOT_FOUND', 'INVALID_REFERENCE', 'ROLLBACK_WOULD_OVERDRAW'))
+        constraint "wager_transactions_failure_code_check" check ("failure_code" is null or "failure_code" in ('INSUFFICIENT_FUNDS', 'REFERENCE_NOT_FOUND', 'INVALID_REFERENCE', 'ROLLBACK_WOULD_OVERDRAW')),
+        constraint "wager_transactions_result_balance_non_negative_check" check ("result_balance_amount" is null or "result_balance_amount" >= 0)
       );
 
       create index "wager_transactions_wallet_created_at_index" on "wager_transactions" ("wallet_id", "created_at");

@@ -23,6 +23,7 @@ export interface WagerTransactionEntity {
   referenceTransactionId?: string;
   status: WagerTransactionStatus;
   failureCode?: WagerFailureCode;
+  resultBalanceAmount?: string;
   createdAt: Date;
   processedAt?: Date;
 }
@@ -52,6 +53,12 @@ export const WagerTransactionEntitySchema = new EntitySchema<WagerTransactionEnt
     referenceTransactionId: { type: 'uuid', fieldName: 'reference_transaction_id', nullable: true },
     status: { type: 'string' },
     failureCode: { type: 'string', fieldName: 'failure_code', length: 64, nullable: true },
+    resultBalanceAmount: {
+      type: 'decimal',
+      columnType: 'numeric(18,2)',
+      fieldName: 'result_balance_amount',
+      nullable: true,
+    },
     createdAt: { type: 'datetime', columnType: 'timestamptz', fieldName: 'created_at' },
     processedAt: { type: 'datetime', columnType: 'timestamptz', fieldName: 'processed_at', nullable: true },
   },
