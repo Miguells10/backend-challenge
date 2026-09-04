@@ -1,7 +1,11 @@
 import { LockMode } from '@mikro-orm/core';
 import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
+import {
+  PENDING_REFERENCE_RETRY_POLICY,
+  type PendingReferenceRetryPolicy,
+} from '../../config/pending-reference-retry-policy';
 import { Money } from '../../domain/money/money';
 import { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
 import { OutboxMessage } from '../../domain/messaging/outbox-message';
@@ -73,7 +77,11 @@ export class IdempotencyConflictError extends Error {
 
 @Injectable()
 export class ProcessWagerTransactionUseCase {
-  public constructor(private readonly orm: MikroORM) {}
+  public constructor(
+    private readonly orm: MikroORM,
+    @Inject(PENDING_REFERENCE_RETRY_POLICY)
+    private readonly pendingReferenceRetryPolicy: PendingReferenceRetryPolicy,
+  ) {}
 
   public async execute(command: ProcessWagerTransactionCommand): Promise<ProcessWagerTransactionResult> {
     return this.orm.em.fork().transactional((em) => this.executeInTransaction(em, command), { clear: true });
@@ -84,6 +92,67 @@ export class ProcessWagerTransactionUseCase {
     command: ProcessWagerTransactionCommand,
   ): Promise<ProcessWagerTransactionResult> {
     return this.process(em, command);
+  }
+
+  public async reprocessPendingReferenceInTransaction(
+    em: EntityManager,
+    transactionId: string,
+    occurredAt: Date,
+  ): Promise<boolean> {
+    const transactionEntity = await em.findOne(
+      WagerTransactionEntitySchema,
+      { id: transactionId },
+      { lockMode: LockMode.PESSIMISTIC_WRITE },
+    );
+    if (transactionEntity === null || transactionEntity.status !== WagerTransactionStatus.PendingReference) {
+      return true;
+    }
+
+    const walletEntity = await em.findOne(
+      WalletEntitySchema,
+      { id: transactionEntity.walletId },
+      { lockMode: LockMode.PESSIMISTIC_WRITE },
+    );
+    if (walletEntity === null) {
+      throw new WalletNotFoundError(transactionEntity.walletId);
+    }
+
+    const transaction = this.toTransaction(transactionEntity);
+    const reference = await this.resolveReference(em, transaction);
+    if (reference === undefined) {
+      return false;
+    }
+
+    const wallet = this.toWallet(walletEntity);
+    if (!this.isValidReference(transaction, reference)) {
+      transaction.reject(WagerFailureCode.InvalidReference);
+      await this.persistTransaction(em, transaction, wallet.balance, transactionEntity);
+      return true;
+    }
+
+    await this.applyBalanceChange(em, transaction, wallet, walletEntity, reference, occurredAt, transactionEntity);
+    return true;
+  }
+
+  public async rejectPendingReferenceInTransaction(
+    em: EntityManager,
+    transactionId: string,
+    referenceAttempts: number,
+  ): Promise<void> {
+    const transactionEntity = await em.findOne(
+      WagerTransactionEntitySchema,
+      { id: transactionId },
+      { lockMode: LockMode.PESSIMISTIC_WRITE },
+    );
+    if (transactionEntity === null || transactionEntity.status !== WagerTransactionStatus.PendingReference) {
+      return;
+    }
+
+    const transaction = this.toTransaction(transactionEntity);
+    transaction.reject(WagerFailureCode.ReferenceNotFound);
+    transactionEntity.referenceAttempts = referenceAttempts;
+    const balance = Money.from({ amount: transactionEntity.resultBalanceAmount!, currency: transactionEntity.currency });
+    await this.persistTransaction(em, transaction, balance, transactionEntity);
   }
 
   private async process(
@@ -148,6 +217,7 @@ export class ProcessWagerTransactionUseCase {
     walletEntity: WalletEntity,
     reference: WagerTransaction | undefined,
     occurredAt: Date,
+    existingTransactionEntity?: WagerTransactionEntity,
   ): Promise<ProcessWagerTransactionResult> {
     try {
       const change = transaction.ledgerDirectionFor(reference) === 'CREDIT'
@@ -172,7 +242,7 @@ export class ProcessWagerTransactionUseCase {
       // O ledger exige que a transação já exista no banco por uma chave estrangeira.
       // Os dois flushes ainda pertencem à mesma transação SQL: se o ledger falhar,
       // o banco desfaz também a transação e a atualização da wallet.
-      em.persist(this.toTransactionEntity(em, transaction, wallet.balance));
+      em.persist(this.transactionEntity(em, transaction, wallet.balance, existingTransactionEntity));
       await em.flush();
 
       const outboxMessages = this.createOutboxMessages(transaction, wallet.balance, wallet, entry);
@@ -193,7 +263,7 @@ export class ProcessWagerTransactionUseCase {
           ? WagerFailureCode.RollbackWouldOverdraw
           : WagerFailureCode.InsufficientFunds,
       );
-      return this.persistTransaction(em, transaction, wallet.balance);
+      return this.persistTransaction(em, transaction, wallet.balance, existingTransactionEntity);
     }
   }
 
@@ -229,8 +299,9 @@ export class ProcessWagerTransactionUseCase {
     em: EntityManager,
     transaction: WagerTransaction,
     balance: Money,
+    existingTransactionEntity?: WagerTransactionEntity,
   ): Promise<ProcessWagerTransactionResult> {
-    em.persist(this.toTransactionEntity(em, transaction, balance));
+    em.persist(this.transactionEntity(em, transaction, balance, existingTransactionEntity));
     await em.flush();
 
     const outboxMessages = this.createOutboxMessages(transaction, balance);
@@ -366,9 +437,34 @@ export class ProcessWagerTransactionUseCase {
       status: transaction.status,
       failureCode: transaction.failureCode,
       resultBalanceAmount: resultBalance.toJSON().amount,
+      referenceAttempts: 0,
+      nextReferenceAttemptAt: transaction.status === WagerTransactionStatus.PendingReference
+        ? new Date(transaction.createdAt.getTime() + this.pendingReferenceRetryPolicy.initialDelayMs)
+        : undefined,
       createdAt: transaction.createdAt,
       processedAt: transaction.processedAt,
     });
+  }
+
+  private transactionEntity(
+    em: EntityManager,
+    transaction: WagerTransaction,
+    balance: Money,
+    existing?: WagerTransactionEntity,
+  ): WagerTransactionEntity {
+    if (existing === undefined) {
+      return this.toTransactionEntity(em, transaction, balance);
+    }
+
+    existing.referenceTransactionId = transaction.referenceTransactionId;
+    existing.status = transaction.status;
+    existing.failureCode = transaction.failureCode;
+    existing.resultBalanceAmount = balance.toJSON().amount;
+    existing.processedAt = transaction.processedAt;
+    existing.nextReferenceAttemptAt = transaction.status === WagerTransactionStatus.PendingReference
+      ? existing.nextReferenceAttemptAt
+      : undefined;
+    return existing;
   }
 
   private toLedgerEntryEntity(em: EntityManager, entry: WalletLedgerEntry): WalletLedgerEntryEntity {

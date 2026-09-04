@@ -8,6 +8,7 @@ import {
 import { MikroORM } from '@mikro-orm/postgresql';
 
 import { ProcessWagerTransactionUseCase } from '../../src/application/wagering/process-wager-transaction.use-case';
+import { pendingReferenceRetryPolicyFromEnvironment } from '../../src/config/pending-reference-retry-policy';
 import { InboxMessageEntitySchema } from '../../src/infrastructure/persistence/entities/inbox-message.entity';
 import { WalletLedgerEntryEntitySchema } from '../../src/infrastructure/persistence/entities/wallet-ledger-entry.entity';
 import { WalletEntitySchema } from '../../src/infrastructure/persistence/entities/wallet.entity';
@@ -35,7 +36,11 @@ describeIntegration('WagerTransactionSqsConsumer', () => {
         secretAccessKey: requiredEnvironment('AWS_SECRET_ACCESS_KEY'),
       },
     });
-    consumer = new WagerTransactionSqsConsumer(orm, new ProcessWagerTransactionUseCase(orm), sqsClient);
+    consumer = new WagerTransactionSqsConsumer(
+      orm,
+      new ProcessWagerTransactionUseCase(orm, pendingReferenceRetryPolicyFromEnvironment({})),
+      sqsClient,
+    );
   });
 
   beforeEach(async () => {

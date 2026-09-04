@@ -5,6 +5,7 @@ import { MikroORM } from '@mikro-orm/postgresql';
 import { Money } from '../../src/domain/money/money';
 import { WagerTransactionKind } from '../../src/domain/wagering/wager-transaction';
 import { ProcessWagerTransactionUseCase } from '../../src/application/wagering/process-wager-transaction.use-case';
+import { pendingReferenceRetryPolicyFromEnvironment } from '../../src/config/pending-reference-retry-policy';
 import { OutboxMessageEntitySchema } from '../../src/infrastructure/persistence/entities/outbox-message.entity';
 import { WalletEntitySchema } from '../../src/infrastructure/persistence/entities/wallet.entity';
 import { OutboxPublisher } from '../../src/sqs/outbox-publisher';
@@ -25,7 +26,7 @@ describeIntegration('OutboxPublisher', () => {
   beforeAll(async () => {
     orm = await MikroORM.init(mikroOrmConfig);
     sqsClient = createSqsClient();
-    useCase = new ProcessWagerTransactionUseCase(orm);
+    useCase = new ProcessWagerTransactionUseCase(orm, pendingReferenceRetryPolicyFromEnvironment({}));
     publisher = new OutboxPublisher(orm, sqsClient);
   });
 

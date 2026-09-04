@@ -308,3 +308,26 @@ Cada publisher seleciona um único evento pendente dentro de transação SQL usa
 - Se houver falha entre enviar ao SQS e registrar `published_at`, pode ocorrer nova publicação. Isso é seguro porque os consumidores continuam idempotentes e o event id também ajuda a janela de deduplicação da FIFO.
 - O lock fica aberto durante uma chamada de rede curta. É um trade-off explícito e adequado ao timebox; uma evolução para alto volume seria adicionar lease/claim persistente para não manter a transação durante o envio.
 - O publisher é outro processo escalável, iniciado com o perfil `publisher` do Docker Compose.
+
+## ADR-015: Reprocessamento persistente de referências pendentes
+
+### Status
+
+Aceita.
+
+### Contexto
+
+`REFUND` e `ROLLBACK` dependem de uma transação anterior. Como o SQS entrega mensagens fora de ordem, a dependente pode chegar antes da referência. Recusar de imediato perderia uma operação válida, enquanto esperar indefinidamente deixaria pendências sem diagnóstico.
+
+### Decisão
+
+Uma operação sem referência é persistida como `PENDING_REFERENCE`, já com um evento na outbox. A tabela guarda `reference_attempts` e `next_reference_attempt_at`. O processo separado `bun run start:reference-reprocessor` busca itens vencidos com `FOR UPDATE SKIP LOCKED`, tenta resolvê-los na mesma transação SQL e aplica a movimentação financeira normalmente quando a referência aparece. Referências ainda ausentes usam backoff exponencial de 5 segundos até 5 minutos; após 5 tentativas, a transação torna-se `REJECTED` com `REFERENCE_NOT_FOUND` e seu evento também entra na outbox no mesmo commit.
+
+Os valores operacionais são uma única política configurável por ambiente, validada ao iniciar: atraso inicial e máximo, máximo de tentativas, tamanho do lote e intervalo de polling. Há defaults seguros para o ambiente local; API, consumer e reprocessador recebem a mesma política, evitando cronogramas divergentes.
+
+### Consequências
+
+- Múltiplos reprocessadores podem rodar em paralelo: o lock por linha distribui pendências sem coordenador externo.
+- `reference_attempts` preserva o histórico operacional; o índice parcial cobre apenas a fila de pendências consultada pelo worker.
+- A atualização de agendamento, a rejeição terminal ou a alteração de saldo sempre usam a mesma conexão da transação que obteve o lock. Isso evita que uma conexão espere pelo lock da própria transação.
+- O processo é iniciado pelo perfil `reference-reprocessor` do Docker Compose. Em alto volume, o lote e a estratégia de claim/lease podem evoluir sem mudar a máquina de estados.

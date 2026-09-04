@@ -24,6 +24,8 @@ export interface WagerTransactionEntity {
   status: WagerTransactionStatus;
   failureCode?: WagerFailureCode;
   resultBalanceAmount?: string;
+  referenceAttempts: number;
+  nextReferenceAttemptAt?: Date;
   createdAt: Date;
   processedAt?: Date;
 }
@@ -59,6 +61,13 @@ export const WagerTransactionEntitySchema = new EntitySchema<WagerTransactionEnt
       fieldName: 'result_balance_amount',
       nullable: true,
     },
+    referenceAttempts: { type: 'integer', fieldName: 'reference_attempts', default: 0 },
+    nextReferenceAttemptAt: {
+      type: 'datetime',
+      columnType: 'timestamptz',
+      fieldName: 'next_reference_attempt_at',
+      nullable: true,
+    },
     createdAt: { type: 'datetime', columnType: 'timestamptz', fieldName: 'created_at' },
     processedAt: { type: 'datetime', columnType: 'timestamptz', fieldName: 'processed_at', nullable: true },
   },
@@ -67,6 +76,10 @@ export const WagerTransactionEntitySchema = new EntitySchema<WagerTransactionEnt
     {
       name: 'wager_transactions_provider_reference_external_id_index',
       properties: ['providerId', 'referenceExternalTransactionId'],
+    },
+    {
+      name: 'wager_transactions_pending_reference_cursor_index',
+      properties: ['status', 'nextReferenceAttemptAt'],
     },
   ],
   uniques: [

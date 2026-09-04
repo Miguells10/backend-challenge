@@ -12,6 +12,7 @@ import {
   ProcessWagerTransactionUseCase,
   type ProcessWagerTransactionCommand,
 } from '../../src/application/wagering/process-wager-transaction.use-case';
+import { pendingReferenceRetryPolicyFromEnvironment } from '../../src/config/pending-reference-retry-policy';
 import { WalletLedgerEntryEntitySchema } from '../../src/infrastructure/persistence/entities/wallet-ledger-entry.entity';
 import { WalletEntitySchema } from '../../src/infrastructure/persistence/entities/wallet.entity';
 import { OutboxMessageEntitySchema } from '../../src/infrastructure/persistence/entities/outbox-message.entity';
@@ -29,7 +30,7 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
 
   beforeAll(async () => {
     orm = await MikroORM.init(mikroOrmConfig);
-    useCase = new ProcessWagerTransactionUseCase(orm);
+    useCase = new ProcessWagerTransactionUseCase(orm, pendingReferenceRetryPolicyFromEnvironment({}));
   });
 
   beforeEach(async () => {

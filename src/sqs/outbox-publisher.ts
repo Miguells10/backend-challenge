@@ -71,7 +71,7 @@ export class OutboxPublisher {
       order by "occurred_at", "id"
       limit 1
       for update skip locked
-    `, [now]);
+    `, [now], 'all', em.getTransactionContext());
     const row = rows[0];
     if (row === undefined) {
       return undefined;
@@ -101,6 +101,8 @@ export class OutboxPublisher {
         where "id" = ?
       `,
       [message.attempts, message.nextAttemptAt ?? null, message.publishedAt ?? null, message.id],
+      'run',
+      em.getTransactionContext(),
     );
   }
 }
