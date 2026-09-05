@@ -12,6 +12,7 @@ import {
   Post,
   Res,
 } from '@nestjs/common';
+import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   ApiAcceptedResponse,
   ApiBadRequestResponse,
@@ -57,7 +58,7 @@ export class WageringController {
   @ApiAcceptedResponse({ description: 'Transação aguardando sua referência.' })
   @ApiBadRequestResponse({ description: 'Contrato HTTP ou regra de negócio inválida.' })
   @ApiNotFoundResponse({ description: 'Wallet não encontrada.' })
-  @ApiConflictResponse({ description: 'Chave de idempotência ausente ou reutilizada com outro payload.' })
+  @ApiConflictResponse({ description: 'Chave de idempotência inválida ou transação externa já registrada.' })
   public async submit(
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Body() dto: SubmitWagerTransactionDto,
@@ -81,6 +82,9 @@ export class WageringController {
     } catch (error) {
       if (error instanceof WalletNotFoundError) throw new NotFoundException(error.message);
       if (error instanceof IdempotencyConflictError) throw new ConflictException(error.message);
+      if (error instanceof UniqueConstraintViolationException) {
+        throw new ConflictException('Esta transação externa já foi registrada para o provedor informado.');
+      }
       if (isClientInputError(error)) throw new BadRequestException(error.message);
       throw error;
     }

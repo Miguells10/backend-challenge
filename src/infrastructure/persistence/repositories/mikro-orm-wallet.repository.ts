@@ -5,6 +5,9 @@ import {
   type WalletReconciliationSnapshot,
   type WalletRepository,
   type WalletSnapshot,
+  type WalletLedgerCursor,
+  type WalletLedgerEntrySnapshot,
+  type WalletLedgerPage,
 } from '../../../wallets/wallet.repository';
 import { WalletEntitySchema } from '../entities/wallet.entity';
 
@@ -61,6 +64,46 @@ export class MikroOrmWalletRepository implements WalletRepository {
     };
   }
 
+  public async findLedgerPage(
+    walletId: string,
+    cursor: WalletLedgerCursor | undefined,
+    limit: number,
+  ): Promise<WalletLedgerPage> {
+    const rows = await this.orm.em.fork().getConnection().execute<WalletLedgerEntryRow[]>(
+      `
+        select
+          le."id",
+          le."transaction_id" as "transactionId",
+          le."direction",
+          le."amount"::text as "amount",
+          le."currency",
+          le."balance_before"::text as "balanceBefore",
+          le."balance_after"::text as "balanceAfter",
+          le."created_at" as "createdAt"
+        from "wallet_ledger_entries" le
+        where le."wallet_id" = ?
+          and (
+            ?::timestamptz is null
+            or le."created_at" < ?::timestamptz
+            or (le."created_at" = ?::timestamptz and le."id" < ?::uuid)
+          )
+        order by le."created_at" desc, le."id" desc
+        limit ?
+      `,
+      [
+        walletId,
+        cursor?.createdAt ?? null,
+        cursor?.createdAt ?? null,
+        cursor?.createdAt ?? null,
+        cursor?.id ?? null,
+        limit + 1,
+      ],
+    );
+
+    const hasMore = rows.length > limit;
+    return { entries: rows.slice(0, limit).map(toLedgerSnapshot), hasMore };
+  }
+
   private toSnapshot(wallet: { id: string; playerId: string; balanceAmount: string; currency: string; version: number }): WalletSnapshot {
     return {
       id: wallet.id,
@@ -80,4 +123,22 @@ interface WalletReconciliationRow {
   version: number;
   calculatedBalanceAmount: string;
   checkedEntries: number | string;
+}
+
+interface WalletLedgerEntryRow {
+  id: string;
+  transactionId: string;
+  direction: 'CREDIT' | 'DEBIT';
+  amount: string;
+  currency: string;
+  balanceBefore: string;
+  balanceAfter: string;
+  createdAt: Date | string;
+}
+
+function toLedgerSnapshot(row: WalletLedgerEntryRow): WalletLedgerEntrySnapshot {
+  return {
+    ...row,
+    createdAt: row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt),
+  };
 }

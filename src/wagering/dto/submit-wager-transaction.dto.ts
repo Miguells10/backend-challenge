@@ -9,11 +9,11 @@ import {
 } from '../../domain/wagering/wager-transaction';
 
 export class SubmitWagerTransactionDto {
-  @ApiProperty()
+  @ApiProperty({ example: 'provider-demo' })
   @IsString()
   public providerId!: string;
 
-  @ApiProperty()
+  @ApiProperty({ example: 'bet-demo-001' })
   @IsString()
   public externalTransactionId!: string;
 
@@ -25,11 +25,11 @@ export class SubmitWagerTransactionDto {
   @IsUUID()
   public walletId!: string;
 
-  @ApiProperty()
+  @ApiProperty({ example: 'round-demo-001' })
   @IsString()
   public roundId!: string;
 
-  @ApiProperty()
+  @ApiProperty({ example: 'jungle-slots' })
   @IsString()
   public gameId!: string;
 

@@ -56,6 +56,10 @@ describeIntegration('HTTP API', () => {
     const reconciliation = await json<WalletReconciliationResponse>(await fetch(`${baseUrl}/wallets/${wallet.body.id}/reconciliation`, {
       method: 'POST',
     }));
+    const firstLedgerPage = await json<WalletLedgerResponse>(await fetch(`${baseUrl}/wallets/${wallet.body.id}/ledger?limit=1`));
+    const secondLedgerPage = await json<WalletLedgerResponse>(await fetch(
+      `${baseUrl}/wallets/${wallet.body.id}/ledger?limit=1&cursor=${encodeURIComponent(firstLedgerPage.body.nextCursor ?? '')}`,
+    ));
     const walletAfterReconciliation = await json(await fetch(`${baseUrl}/wallets/${wallet.body.id}`));
     const metricsResponse = await fetch(`${baseUrl}/metrics`);
     const metrics = await metricsResponse.text();
@@ -78,6 +82,13 @@ describeIntegration('HTTP API', () => {
       consistent: true,
       checkedEntries: 2,
     });
+    expect(firstLedgerPage.response.status).toBe(200);
+    expect(firstLedgerPage.body.items).toHaveLength(1);
+    expect(firstLedgerPage.body.items[0]?.money.currency).toBe('BRL');
+    expect(firstLedgerPage.body.nextCursor).toBeString();
+    expect(secondLedgerPage.body.items).toHaveLength(1);
+    expect(secondLedgerPage.body.nextCursor).toBeNull();
+    expect(secondLedgerPage.body.items[0]?.id).not.toBe(firstLedgerPage.body.items[0]?.id);
     expect(walletAfterReconciliation.body).toEqual(walletRead.body);
     expect(metricsResponse.status).toBe(200);
     expect(metricsResponse.headers.get('content-type')).toContain('text/plain');
@@ -149,6 +160,8 @@ describeIntegration('HTTP API', () => {
       method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'provider-http:invalid-currency' },
       body: JSON.stringify({ ...wagerRequest({ playerId, walletId: wallet.id, externalTransactionId: 'invalid-currency' }), money: { amount: '1.00', currency: 'brl' } }),
     }));
+    const invalidLedgerCursor = await json<ApiError>(await fetch(`${baseUrl}/wallets/${wallet.id}/ledger?cursor=invalid`));
+    const invalidLedgerLimit = await json<ApiError>(await fetch(`${baseUrl}/wallets/${wallet.id}/ledger?limit=0`));
 
     expect(zeroValueBet.response.status).toBe(400);
     expect(zeroValueBet.body.statusCode).toBe(400);
@@ -158,12 +171,17 @@ describeIntegration('HTTP API', () => {
     expect(openingTransaction.body.statusCode).toBe(400);
     expect(invalidAmount.body.message).toEqual(['money.amount deve ter duas casas decimais, por exemplo: 100.00.']);
     expect(invalidCurrency.body.message).toEqual(['money.currency deve ter exatamente três letras maiúsculas, por exemplo: BRL.']);
+    expect(invalidLedgerCursor.response.status).toBe(400);
+    expect(invalidLedgerCursor.body.message).toEqual('O cursor do ledger é inválido.');
+    expect(invalidLedgerLimit.response.status).toBe(400);
   });
 
   test('returns documented statuses for missing resources, idempotency conflict, and pending references', async () => {
     const missingWallet = await json<ApiError>(await fetch(`${baseUrl}/wallets/${crypto.randomUUID()}`));
     const missingTransaction = await json<ApiError>(await fetch(`${baseUrl}/wagering/transactions/${crypto.randomUUID()}`));
     const missingReconciliation = await json<ApiError>(await fetch(`${baseUrl}/wallets/${crypto.randomUUID()}/reconciliation`, { method: 'POST' }));
+    const missingLedger = await json<ApiError>(await fetch(`${baseUrl}/wallets/${crypto.randomUUID()}/ledger`));
+    const invalidLedgerCursor = await json<ApiError>(await fetch(`${baseUrl}/wallets/${crypto.randomUUID()}/ledger?cursor=invalid`));
     const playerId = crypto.randomUUID();
     const wallet = await createWallet(baseUrl, playerId);
     const request = wagerRequest({ playerId, walletId: wallet.id, externalTransactionId: 'conflicting-bet' });
@@ -177,6 +195,11 @@ describeIntegration('HTTP API', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'idempotency-key': 'provider-http:conflicting-bet' },
       body: JSON.stringify({ ...request, money: { amount: '30.00', currency: 'BRL' } }),
+    }));
+    const externalTransactionConflict = await json<ApiError>(await fetch(`${baseUrl}/wagering/transactions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'provider-http:conflicting-bet-new-key' },
+      body: JSON.stringify(request),
     }));
     const pending = await json<PendingWagerResponse>(await fetch(`${baseUrl}/wagering/transactions`, {
       method: 'POST',
@@ -193,8 +216,12 @@ describeIntegration('HTTP API', () => {
     expect(missingWallet.response.status).toBe(404);
     expect(missingTransaction.response.status).toBe(404);
     expect(missingReconciliation.response.status).toBe(404);
+    expect(missingLedger.response.status).toBe(404);
+    expect(invalidLedgerCursor.response.status).toBe(404);
     expect(accepted.status).toBe(200);
     expect(conflict.response.status).toBe(409);
+    expect(externalTransactionConflict.response.status).toBe(409);
+    expect(externalTransactionConflict.body.message).toBe('Esta transação externa já foi registrada para o provedor informado.');
     expect(pending.response.status).toBe(202);
     expect(pending.body.status).toBe('PENDING_REFERENCE');
   });
@@ -228,6 +255,7 @@ describeIntegration('HTTP API', () => {
       schema: { type: 'string', example: 'demo-bet-001' },
     }]);
     expect(swagger.body.paths['/metrics'].get.responses['200']).toBeDefined();
+    expect(swagger.body.paths['/wallets/{walletId}/ledger'].get.responses['200']).toBeDefined();
   });
 });
 
@@ -276,7 +304,7 @@ interface ApiResponse {
 
 interface ApiError {
   statusCode: number;
-  message?: string[];
+  message?: string | string[];
 }
 
 interface PendingWagerResponse {
@@ -295,6 +323,15 @@ interface WalletReconciliationResponse {
   difference: { amount: string; currency: string };
   consistent: boolean;
   checkedEntries: number;
+}
+
+interface WalletLedgerResponse {
+  items: Array<{
+    id: string;
+    money: { amount: string; currency: string };
+  }>;
+  nextCursor: string | null;
+  limit: number;
 }
 
 interface WagerRequestOptions {
@@ -333,6 +370,9 @@ interface SwaggerDocument {
       };
     };
     '/metrics': {
+      get: { responses: Record<string, unknown> };
+    };
+    '/wallets/{walletId}/ledger': {
       get: { responses: Record<string, unknown> };
     };
   };
