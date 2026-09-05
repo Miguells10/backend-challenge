@@ -13,7 +13,9 @@ import {
   type ProcessWagerTransactionCommand,
 } from '../../src/application/wagering/process-wager-transaction.use-case';
 import { pendingReferenceRetryPolicyFromEnvironment } from '../../src/config/pending-reference-retry-policy';
+import { CreateWalletUseCase } from '../../src/wallets/create-wallet.use-case';
 import { WalletLedgerEntryEntitySchema } from '../../src/infrastructure/persistence/entities/wallet-ledger-entry.entity';
+import { MikroOrmWalletRepository } from '../../src/infrastructure/persistence/repositories/mikro-orm-wallet.repository';
 import { WalletEntitySchema } from '../../src/infrastructure/persistence/entities/wallet.entity';
 import { OutboxMessageEntitySchema } from '../../src/infrastructure/persistence/entities/outbox-message.entity';
 import { WagerTransactionEntitySchema } from '../../src/infrastructure/persistence/entities/wager-transaction.entity';
@@ -122,41 +124,46 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
     expect(ledgerEntries).toBe(1);
   });
 
-  test('serializes competing debits and never persists a negative balance', async () => {
+  test('processes exactly one of two concurrent bets of 80.00 and keeps the ledger reconciled', async () => {
+    await testEm.getConnection().execute('truncate table outbox_messages, inbox_messages, wallet_ledger_entries, wager_transactions, wallets cascade');
+    const playerId = crypto.randomUUID();
+    const openedWallet = await new CreateWalletUseCase(orm).execute({
+      playerId,
+      initialBalance: money('100.00'),
+    });
     const results = await Promise.all([
       useCase.execute(command({
         id: '00000000-0000-0000-0000-000000000201',
         externalTransactionId: 'competing-bet-1',
         idempotencyKey: 'provider-1:competing-bet-1',
         payloadHash: 'payload-hash-competing-1',
-        money: money('60.00'),
+        walletId: openedWallet.id,
+        playerId,
+        money: money('80.00'),
       })),
       useCase.execute(command({
         id: '00000000-0000-0000-0000-000000000202',
         externalTransactionId: 'competing-bet-2',
         idempotencyKey: 'provider-1:competing-bet-2',
         payloadHash: 'payload-hash-competing-2',
-        money: money('60.00'),
-      })),
-      useCase.execute(command({
-        id: '00000000-0000-0000-0000-000000000203',
-        externalTransactionId: 'competing-bet-3',
-        idempotencyKey: 'provider-1:competing-bet-3',
-        payloadHash: 'payload-hash-competing-3',
-        money: money('60.00'),
+        walletId: openedWallet.id,
+        playerId,
+        money: money('80.00'),
       })),
     ]);
     testEm.clear();
 
-    const wallet = await testEm.findOneOrFail(WalletEntitySchema, WALLET_ID);
-    const ledgerEntries = await testEm.find(WalletLedgerEntryEntitySchema, { walletId: WALLET_ID });
+    const wallet = await testEm.findOneOrFail(WalletEntitySchema, openedWallet.id);
+    const ledgerEntries = await testEm.find(WalletLedgerEntryEntitySchema, { walletId: openedWallet.id });
+    const reconciliation = await new MikroOrmWalletRepository(orm).reconcile(openedWallet.id);
 
     expect(results.filter((result) => result.status === WagerTransactionStatus.Processed)).toHaveLength(1);
-    expect(results.filter((result) => result.status === WagerTransactionStatus.Rejected)).toHaveLength(2);
-    expect(wallet.balanceAmount).toBe('40.00');
+    expect(results.filter((result) => result.status === WagerTransactionStatus.Rejected)).toHaveLength(1);
+    expect(wallet.balanceAmount).toBe('20.00');
     expect(wallet.version).toBe(2);
-    expect(ledgerEntries).toHaveLength(1);
-    expect(ledgerEntries[0]?.balanceAfter).toBe('40.00');
+    expect(ledgerEntries).toHaveLength(2);
+    expect(ledgerEntries.filter((entry) => entry.direction === 'DEBIT')).toHaveLength(1);
+    expect(reconciliation?.calculatedBalanceAmount).toBe('20.00');
   });
 
   test('processes independent wallets concurrently without cross-wallet blocking', async () => {

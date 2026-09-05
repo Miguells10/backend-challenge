@@ -80,6 +80,33 @@ describeIntegration('OutboxPublisher', () => {
     ]);
   });
 
+  test('publishes messages committed before a new publisher instance starts', async () => {
+    await useCase.execute({
+      id: '00000000-0000-0000-0000-000000000104',
+      providerId: 'provider-1',
+      externalTransactionId: 'external-restart-1',
+      idempotencyKey: 'provider-1:external-restart-1',
+      payloadHash: 'payload-hash-restart-1',
+      walletId: WALLET_ID,
+      playerId: PLAYER_ID,
+      roundId: 'round-1',
+      gameId: 'game-1',
+      kind: WagerTransactionKind.Bet,
+      money: Money.from({ amount: '25.00', currency: 'BRL' }),
+      occurredAt: new Date('2026-09-04T21:00:00.000Z'),
+    });
+    const restartedPublisher = new OutboxPublisher(orm, sqsClient);
+
+    await restartedPublisher.publishDue();
+    testEm.clear();
+
+    const outboxMessages = await testEm.find(OutboxMessageEntitySchema, {});
+    const publishedEvents = await receiveEvents();
+
+    expect(outboxMessages.every((message) => message.publishedAt !== undefined)).toBe(true);
+    expect(publishedEvents).toHaveLength(2);
+  });
+
   async function receiveEvents(): Promise<Array<{ eventType: string }>> {
     const events: Array<{ eventType: string }> = [];
     while (events.length < 2) {
