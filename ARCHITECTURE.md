@@ -415,7 +415,7 @@ O experimento de carga que exerce essas decisões está descrito em [docs/load-t
 - As métricas de uma réplica reiniciam com o processo; em produção, Prometheus deve descobrir e consultar cada instância e fazer a agregação temporal.
 - `service` e `instance` distinguem API, workers e publishers sem transformar IDs de wallet ou transação em labels de alta cardinalidade.
 - A consulta do tamanho da DLQ é aproximada, como definido pelo SQS, e falhas nessa medição não interrompem o processamento financeiro.
-- O desafio não inclui um servidor Prometheus ou dashboard: a aplicação entrega o formato e os endpoints prontos para coleta externa.
+- O dashboard local é uma ferramenta de diagnóstico; alertas, retenção longa e autenticação do Grafana continuam responsabilidades de um ambiente de produção.
 
 ## ADR-020: Autenticação e tracing como extensões deliberadamente adiadas
 
@@ -431,10 +431,32 @@ O enunciado não atribui pontos à autenticação e considera OpenTelemetry e da
 
 Não integrar um IdP nem criar autenticação artesanal neste timebox. Em produção, a API HTTP receberia uma identidade de provedor validada por OIDC e a propagaria até os casos de uso, sem introduzir usuários ou senhas próprios. Health checks permanecem públicos e mensagens SQS são canal interno confiável.
 
-Não instalar Prometheus server, Grafana, OpenTelemetry ou Jaeger neste repositório. A solução expõe logs JSON e métricas Prometheus por processo para que essas ferramentas sejam conectadas sem alterar as regras financeiras.
+Não instalar OpenTelemetry ou Jaeger neste repositório. A solução expõe logs JSON e métricas Prometheus por processo; Prometheus e Grafana locais são tratados no ADR-021.
 
 ### Consequências
 
 - Nenhuma rota HTTP deve ser tratada como protegida em uma implantação pública antes da integração OIDC.
 - A ausência de tracing distribuído limita a investigação visual ponta a ponta entre HTTP, outbox e SQS, mas `correlationId`, `transactionId` e `messageId` permitem relacionar os logs atuais.
 - O escopo permanece concentrado nas garantias que impedem perda, duplicação ou corrupção financeira.
+
+## ADR-021: Stack local de Prometheus e Grafana provisionada por arquivos
+
+### Status
+
+Aceita.
+
+### Contexto
+
+As métricas já existiam por processo, mas exigiam leitura manual de endpoints separados. Para demonstrar a saúde do fluxo distribuído, é útil visualizar taxa de transações, latência, atraso da outbox, DLQ, duplicatas e conflitos de lock em um único lugar.
+
+### Decisão
+
+Adicionar os serviços opcionais `prometheus` e `grafana` no perfil Docker `observability`. Prometheus coleta a API e os processos de background pela rede interna do Compose. Grafana recebe datasource e dashboard versionados, portanto abre o dashboard **Distributed Wagering Overview** sem configuração manual.
+
+O dashboard não possui labels de wallet, jogador ou transação; ele trabalha com as labels operacionais já existentes (`service`, `instance`, `status` e `source`) para evitar alta cardinalidade.
+
+### Consequências
+
+- O ambiente completo passa a expor Prometheus em `9090` e Grafana em `3001`; as credenciais padrão são somente para desenvolvimento local e devem ser alteradas fora desse contexto.
+- O perfil continua opcional: indisponibilidade do dashboard não afeta processamento, transações SQL, inbox ou outbox.
+- A descoberta DNS do Prometheus acompanha as réplicas do serviço `worker` no Compose; uma plataforma de produção deve substituir isso por descoberta própria do orquestrador e definir alertas, retenção e controle de acesso.

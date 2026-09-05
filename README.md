@@ -56,11 +56,11 @@ Mais detalhes e decisões estão em [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ```powershell
 Copy-Item .env.example .env
-docker compose --profile worker --profile publisher --profile reference-reprocessor up -d --build
+docker compose --profile worker --profile publisher --profile reference-reprocessor --profile observability up -d --build
 docker compose exec api bun run migration:up
 ```
 
-O primeiro comando sobe PostgreSQL, LocalStack, API, consumer SQS, publisher da outbox e reprocessador de referências.
+O primeiro comando sobe PostgreSQL, LocalStack, API, consumer SQS, publisher da outbox, reprocessador de referências, Prometheus e Grafana.
 
 | Recurso | Endereço |
 |---|---|
@@ -69,6 +69,8 @@ O primeiro comando sobe PostgreSQL, LocalStack, API, consumer SQS, publisher da 
 | Liveness | http://localhost:3000/health/live |
 | Readiness | http://localhost:3000/health/ready |
 | Métricas da API | http://localhost:3000/metrics |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3001 (credenciais locais: `admin` / `admin`) |
 
 Para acompanhar a execução:
 
@@ -160,6 +162,7 @@ Copie `.env.example` para `.env`. As variáveis mais importantes são:
 | `WAGER_TRANSACTIONS_DLQ_URL` | Fila de mensagens problemáticas. |
 | `WAGER_EVENTS_QUEUE_URL` | Fila de eventos publicados pela outbox. |
 | `PENDING_REFERENCE_*` | Backoff, limite e polling de referências pendentes. |
+| `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` | Credenciais do dashboard local; altere antes de expor fora da máquina. |
 
 Para AWS real, mantenha a mesma interface e altere endpoint, URLs de filas, região e credenciais. O código não depende do LocalStack.
 
@@ -210,11 +213,11 @@ O teste cria wallets exclusivas e dispara apostas concorrentes contra a API loca
 
 Logs de negócio são JSON e evitam payloads financeiros completos. As métricas cobrem transações por status, duplicatas, retries, DLQ, locks, latência, atraso da outbox e divergências de reconciliação.
 
-Cada processo possui sua própria rota `/metrics`. A API publica em `3000`; worker, publisher e reprocessador expõem a porta interna `9464` de cada container. Um servidor Prometheus e dashboard Grafana são evoluções planejadas, não dependências para rodar a solução.
+Cada processo possui sua própria rota `/metrics`. A API publica em `3000`; worker, publisher e reprocessador expõem a porta interna `9464` de cada container. O perfil Docker `observability` sobe Prometheus em `9090` e Grafana em `3001`; o dashboard **Distributed Wagering Overview** e a fonte Prometheus são provisionados automaticamente a partir dos arquivos versionados em `docker/`.
 
 ## Limitações e evoluções futuras
 
 - autenticação não foi implementada porque não pontua no desafio; em produção seria integrada a um IdP OIDC, sem usuários ou senhas próprios;
-- OpenTelemetry, Jaeger, Prometheus server e Grafana não foram adicionados; as métricas e logs estruturados já são compatíveis com essa coleta;
+- OpenTelemetry e Jaeger não foram adicionados; as métricas, Prometheus e Grafana já permitem observação por métricas, enquanto tracing distribuído continua como evolução futura;
 - o cursor do ledger é estável para paginação, mas não é um token criptograficamente assinado;
 - o lock pessimista prioriza correção da hot wallet; para volume muito alto, a estratégia de claim/lease da outbox e particionamento podem evoluir.

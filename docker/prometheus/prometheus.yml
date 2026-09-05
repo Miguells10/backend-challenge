@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 5s
+  scrape_timeout: 4s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: [api:3000]
+
+  - job_name: worker
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 9464
+
+  - job_name: publisher
+    metrics_path: /metrics
+    static_configs:
+      - targets: [publisher:9464]
+
+  - job_name: reference-reprocessor
+    metrics_path: /metrics
+    static_configs:
+      - targets: [reference-reprocessor:9464]
