@@ -159,6 +159,42 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
     expect(ledgerEntries[0]?.balanceAfter).toBe('40.00');
   });
 
+  test('processes independent wallets concurrently without cross-wallet blocking', async () => {
+    const secondWalletId = '00000000-0000-0000-0000-000000000301';
+    const secondPlayerId = '00000000-0000-0000-0000-000000000302';
+    testEm.persist(testEm.create(WalletEntitySchema, {
+      id: secondWalletId,
+      playerId: secondPlayerId,
+      currency: 'BRL',
+      balanceAmount: '100.00',
+      version: 1,
+      createdAt: new Date('2026-09-04T18:00:00.000Z'),
+      updatedAt: new Date('2026-09-04T18:00:00.000Z'),
+    }));
+    await testEm.flush();
+
+    const results = await Promise.all([
+      useCase.execute(command()),
+      useCase.execute(command({
+        id: '00000000-0000-0000-0000-000000000303',
+        externalTransactionId: 'independent-wallet-bet',
+        idempotencyKey: 'provider-1:independent-wallet-bet',
+        payloadHash: 'payload-hash-independent-wallet',
+        walletId: secondWalletId,
+        playerId: secondPlayerId,
+      })),
+    ]);
+    testEm.clear();
+
+    const wallets = await testEm.find(WalletEntitySchema, { id: { $in: [WALLET_ID, secondWalletId] } });
+    const ledgerEntries = await testEm.count(WalletLedgerEntryEntitySchema, { walletId: { $in: [WALLET_ID, secondWalletId] } });
+
+    expect(results.every((result) => result.status === WagerTransactionStatus.Processed)).toBe(true);
+    expect(wallets.map((wallet) => wallet.balanceAmount).sort()).toEqual(['75.00', '75.00']);
+    expect(wallets.map((wallet) => wallet.version).sort()).toEqual([2, 2]);
+    expect(ledgerEntries).toBe(2);
+  });
+
   test('rejects reuse of an idempotency key with another payload', async () => {
     await useCase.execute(command());
 

@@ -15,7 +15,7 @@ services:
 
   postgres-test:
     image: postgres:17-alpine
-    profiles: ["test"]
+    profiles: ["test", "distributed-test"]
     environment:
       POSTGRES_DB: wagering_test
       POSTGRES_USER: wagering
@@ -88,6 +88,30 @@ services:
       PENDING_REFERENCE_POLL_INTERVAL_MS: ${PENDING_REFERENCE_POLL_INTERVAL_MS:-1000}
     depends_on:
       postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+  worker-test:
+    build: .
+    command: bun run start:worker
+    profiles: ["distributed-test"]
+    environment:
+      DATABASE_URL: postgresql://wagering:wagering@postgres-test:5432/wagering_test
+      SQS_ENDPOINT: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      WAGER_TRANSACTIONS_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions-test.fifo
+      WAGER_TRANSACTIONS_DLQ_URL: http://localstack:4566/000000000000/wager-transactions-test-dlq.fifo
+      WAGER_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events-test.fifo
+      PENDING_REFERENCE_INITIAL_DELAY_MS: 5000
+      PENDING_REFERENCE_MAX_DELAY_MS: 300000
+      PENDING_REFERENCE_MAX_ATTEMPTS: 5
+      PENDING_REFERENCE_BATCH_SIZE: 10
+      PENDING_REFERENCE_POLL_INTERVAL_MS: 1000
+    depends_on:
+      postgres-test:
         condition: service_healthy
       localstack:
         condition: service_healthy

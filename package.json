@@ -15,6 +15,7 @@
     "test": "bun test",
     "test:unit": "bun test test/unit",
     "test:integration": "bun test --max-concurrency=1 test/integration",
+    "test:distributed-workers": "bun test test/distributed",
     "migration:create": "mikro-orm migration:create",
     "migration:up": "mikro-orm migration:up",
     "migration:down": "mikro-orm migration:down"
