@@ -51,7 +51,7 @@ export class WageringController {
   @ApiHeader({
     name: 'idempotency-key',
     required: true,
-    schema: { example: 'demo-bet-001' },
+    schema: { example: 'provider-demo:bet-demo-001' },
     description: 'Identificador único da operação; reutilize-o somente ao repetir a mesma requisição.',
   })
   @ApiOkResponse({ description: 'Transação processada ou rejeitada.' })

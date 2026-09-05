@@ -252,7 +252,7 @@ describeIntegration('HTTP API', () => {
       required: true,
       in: 'header',
       description: 'Identificador único da operação; reutilize-o somente ao repetir a mesma requisição.',
-      schema: { type: 'string', example: 'demo-bet-001' },
+      schema: { type: 'string', example: 'provider-demo:bet-demo-001' },
     }]);
     expect(swagger.body.paths['/metrics'].get.responses['200']).toBeDefined();
     expect(swagger.body.paths['/wallets/{walletId}/ledger'].get.responses['200']).toBeDefined();

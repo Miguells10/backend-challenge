@@ -198,6 +198,14 @@ O teste distribuído sobe três containers `worker-test` e prova que:
 
 Os testes também cobrem 50 cópias paralelas da mesma aposta, redelivery após commit antes do ack, publishers concorrentes, publisher retomando mensagens já confirmadas no banco, referências fora de ordem e DLQ para payload inválido.
 
+### Teste de carga local
+
+```powershell
+bun run test:load
+```
+
+O teste cria wallets exclusivas e dispara apostas concorrentes contra a API local. Ele imprime e salva throughput, p50/p95/p99, taxa de erro, conflitos HTTP inesperados, resultado da disputa de hot wallet, reconciliação e atraso da outbox. Consulte [docs/load-testing.md](./docs/load-testing.md) para preparar o ambiente, ajustar a carga e interpretar os números sem extrapolar resultados locais para produção. Uma execução de referência está em [docs/load-test-result.md](./docs/load-test-result.md).
+
 ## Observabilidade
 
 Logs de negócio são JSON e evitam payloads financeiros completos. As métricas cobrem transações por status, duplicatas, retries, DLQ, locks, latência, atraso da outbox e divergências de reconciliação.
@@ -208,6 +216,5 @@ Cada processo possui sua própria rota `/metrics`. A API publica em `3000`; work
 
 - autenticação não foi implementada porque não pontua no desafio; em produção seria integrada a um IdP OIDC, sem usuários ou senhas próprios;
 - OpenTelemetry, Jaeger, Prometheus server e Grafana não foram adicionados; as métricas e logs estruturados já são compatíveis com essa coleta;
-- não há teste de carga dedicado; os testes de concorrência comprovam correção, não throughput máximo;
 - o cursor do ledger é estável para paginação, mas não é um token criptograficamente assinado;
 - o lock pessimista prioriza correção da hot wallet; para volume muito alto, a estratégia de claim/lease da outbox e particionamento podem evoluir.

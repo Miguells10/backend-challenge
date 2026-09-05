@@ -3,4 +3,5 @@ dist/
 coverage/
 .env
 *.log
+artifacts/
 .DS_Store

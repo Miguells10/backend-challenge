@@ -408,6 +408,8 @@ Emitir logs JSON de negócio com nome do serviço e da instância, além de `cor
 
 Cada processo mantém um registro Prometheus próprio. A API o expõe em `GET /metrics`; consumer, publisher e reprocessador abrem a mesma rota em sua porta interna `METRICS_PORT`. As séries cobrem resultados por status, duplicatas idempotentes, retries por componente, entradas e tamanho aproximado da DLQ, conflitos de lock, atraso da outbox, divergências de reconciliação e histograma de latência do processamento.
 
+O experimento de carga que exerce essas decisões está descrito em [docs/load-testing.md](./docs/load-testing.md); uma execução de referência local, com ambiente, metodologia e resultados, está em [docs/load-test-result.md](./docs/load-test-result.md).
+
 ### Consequências
 
 - As métricas de uma réplica reiniciam com o processo; em produção, Prometheus deve descobrir e consultar cada instância e fazer a agregação temporal.
