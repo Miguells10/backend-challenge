@@ -218,12 +218,9 @@ Mapear a persistência com `EntitySchema` do MikroORM, mantendo classes de domí
 - O modelo de persistência pode evoluir sem contaminar `Money`, `Wallet`, `WagerTransaction` ou `WalletLedgerEntry` com detalhes do ORM.
 - Inbox, outbox e a estratégia de lock por wallet entrarão em migrations posteriores, antes do caso de uso financeiro distribuído.
 
-## Próximas decisões a registrar
+## Decisões registradas posteriormente
 
-- Idempotency key e algoritmo de hash de payload canônico.
-- Estratégia de concorrência por wallet e constraints do banco.
-- Inbox, Outbox transacional, retries, referências pendentes e comportamento da DLQ.
-- Mapeamento de erros HTTP, logs estruturados, métricas e estratégia de testes.
+As decisões inicialmente pendentes foram registradas nos ADRs 011 a 019: lock por wallet, inbox/outbox, consumer SQS, publisher concorrente, referências pendentes, DLQ, adaptadores HTTP, consultas e observabilidade.
 
 ## ADR-011: Transação SQL e lock pessimista por wallet
 
@@ -370,7 +367,7 @@ Expor uma API REST com criação e consulta de wallet, submissão de wagering e 
 
 - Uma BET enviada por HTTP ou SQS segue as mesmas regras de idempotência, lock e ledger.
 - `PENDING_REFERENCE` retorna `202 Accepted`; os demais resultados financeiros retornam o status de domínio no corpo da resposta.
-- Consultas expõem dados persistidos sem reexecutar regras de negócio. A reconciliação compara o saldo materializado com a soma do ledger sem corrigir divergências; paginação detalhada do ledger permanece uma evolução futura.
+- Consultas expõem dados persistidos sem reexecutar regras de negócio. A reconciliação compara o saldo materializado com a soma do ledger sem corrigir divergências; `GET /wallets/:walletId/ledger` pagina os lançamentos por cursor estável de `createdAt` e `id`.
 
 ## ADR-018: DTOs HTTP, casos de uso de consulta e repositórios específicos
 
@@ -417,3 +414,25 @@ Cada processo mantém um registro Prometheus próprio. A API o expõe em `GET /m
 - `service` e `instance` distinguem API, workers e publishers sem transformar IDs de wallet ou transação em labels de alta cardinalidade.
 - A consulta do tamanho da DLQ é aproximada, como definido pelo SQS, e falhas nessa medição não interrompem o processamento financeiro.
 - O desafio não inclui um servidor Prometheus ou dashboard: a aplicação entrega o formato e os endpoints prontos para coleta externa.
+
+## ADR-020: Autenticação e tracing como extensões deliberadamente adiadas
+
+### Status
+
+Aceita para o escopo do desafio.
+
+### Contexto
+
+O enunciado não atribui pontos à autenticação e considera OpenTelemetry e dashboard opcionais. Já correção financeira, concorrência, idempotência, recuperação e documentação possuem peso direto e precisam caber no prazo.
+
+### Decisão
+
+Não integrar um IdP nem criar autenticação artesanal neste timebox. Em produção, a API HTTP receberia uma identidade de provedor validada por OIDC e a propagaria até os casos de uso, sem introduzir usuários ou senhas próprios. Health checks permanecem públicos e mensagens SQS são canal interno confiável.
+
+Não instalar Prometheus server, Grafana, OpenTelemetry ou Jaeger neste repositório. A solução expõe logs JSON e métricas Prometheus por processo para que essas ferramentas sejam conectadas sem alterar as regras financeiras.
+
+### Consequências
+
+- Nenhuma rota HTTP deve ser tratada como protegida em uma implantação pública antes da integração OIDC.
+- A ausência de tracing distribuído limita a investigação visual ponta a ponta entre HTTP, outbox e SQS, mas `correlationId`, `transactionId` e `messageId` permitem relacionar os logs atuais.
+- O escopo permanece concentrado nas garantias que impedem perda, duplicação ou corrupção financeira.
