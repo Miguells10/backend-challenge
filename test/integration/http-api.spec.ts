@@ -53,6 +53,10 @@ describeIntegration('HTTP API', () => {
     const oneWallet = await json<WalletListResponse>(await fetch(`${baseUrl}/wallets?limit=1`));
     const transactionRead = await json(await fetch(`${baseUrl}/wagering/transactions/${wager.body.transactionId}`));
     const externalRead = await json(await fetch(`${baseUrl}/providers/provider-http/wagering/transactions/bet-http-1`));
+    const reconciliation = await json<WalletReconciliationResponse>(await fetch(`${baseUrl}/wallets/${wallet.body.id}/reconciliation`, {
+      method: 'POST',
+    }));
+    const walletAfterReconciliation = await json(await fetch(`${baseUrl}/wallets/${wallet.body.id}`));
 
     expect(wager.response.status).toBe(200);
     expect(wager.body.balance.amount).toBe('75.00');
@@ -63,6 +67,16 @@ describeIntegration('HTTP API', () => {
     expect(oneWallet.body.items).toHaveLength(1);
     expect(transactionRead.body.externalTransactionId).toBe('bet-http-1');
     expect(externalRead.body.id).toBe(wager.body.transactionId);
+    expect(reconciliation.response.status).toBe(200);
+    expect(reconciliation.body).toEqual({
+      walletId: wallet.body.id,
+      storedBalance: { amount: '75.00', currency: 'BRL' },
+      calculatedBalance: { amount: '75.00', currency: 'BRL' },
+      difference: { amount: '0.00', currency: 'BRL' },
+      consistent: true,
+      checkedEntries: 2,
+    });
+    expect(walletAfterReconciliation.body).toEqual(walletRead.body);
   });
 
   test('returns a conflict when the player already has a wallet in that currency', async () => {
@@ -139,6 +153,7 @@ describeIntegration('HTTP API', () => {
   test('returns documented statuses for missing resources, idempotency conflict, and pending references', async () => {
     const missingWallet = await json<ApiError>(await fetch(`${baseUrl}/wallets/${crypto.randomUUID()}`));
     const missingTransaction = await json<ApiError>(await fetch(`${baseUrl}/wagering/transactions/${crypto.randomUUID()}`));
+    const missingReconciliation = await json<ApiError>(await fetch(`${baseUrl}/wallets/${crypto.randomUUID()}/reconciliation`, { method: 'POST' }));
     const playerId = crypto.randomUUID();
     const wallet = await createWallet(baseUrl, playerId);
     const request = wagerRequest({ playerId, walletId: wallet.id, externalTransactionId: 'conflicting-bet' });
@@ -167,6 +182,7 @@ describeIntegration('HTTP API', () => {
 
     expect(missingWallet.response.status).toBe(404);
     expect(missingTransaction.response.status).toBe(404);
+    expect(missingReconciliation.response.status).toBe(404);
     expect(accepted.status).toBe(200);
     expect(conflict.response.status).toBe(409);
     expect(pending.response.status).toBe(202);
@@ -259,6 +275,15 @@ interface PendingWagerResponse {
 interface WalletListResponse {
   items: Array<{ id: string }>;
   limit: number;
+}
+
+interface WalletReconciliationResponse {
+  walletId: string;
+  storedBalance: { amount: string; currency: string };
+  calculatedBalance: { amount: string; currency: string };
+  difference: { amount: string; currency: string };
+  consistent: boolean;
+  checkedEntries: number;
 }
 
 interface WagerRequestOptions {

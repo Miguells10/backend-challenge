@@ -6,6 +6,8 @@ import {
   Controller,
   DefaultValuePipe,
   Get,
+  HttpCode,
+  HttpStatus,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -28,6 +30,7 @@ import { CreateWalletUseCase } from './create-wallet.use-case';
 import { CreateWalletDto } from './dto/create-wallet.dto';
 import { GetWalletUseCase, WalletNotFoundError } from './get-wallet.use-case';
 import { ListWalletsUseCase } from './list-wallets.use-case';
+import { ReconcileWalletUseCase } from './reconcile-wallet.use-case';
 
 @ApiTags('Wallets')
 @Controller('wallets')
@@ -36,6 +39,7 @@ export class WalletsController {
     private readonly createWallet: CreateWalletUseCase,
     private readonly getWallet: GetWalletUseCase,
     private readonly listWallets: ListWalletsUseCase,
+    private readonly reconcileWallet: ReconcileWalletUseCase,
   ) {}
 
   @Post()
@@ -78,6 +82,20 @@ export class WalletsController {
   public async get(@Param('walletId') walletId: string) {
     try {
       return await this.getWallet.execute(walletId);
+    } catch (error) {
+      if (error instanceof WalletNotFoundError) throw new NotFoundException(error.message);
+      throw error;
+    }
+  }
+
+  @Post(':walletId/reconciliation')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reconcilia o saldo da wallet com seu ledger' })
+  @ApiOkResponse({ description: 'Comparação entre o saldo materializado e o saldo reconstruído pelo ledger. Não altera dados.' })
+  @ApiNotFoundResponse({ description: 'Wallet não encontrada.' })
+  public async reconcile(@Param('walletId') walletId: string) {
+    try {
+      return await this.reconcileWallet.execute(walletId);
     } catch (error) {
       if (error instanceof WalletNotFoundError) throw new NotFoundException(error.message);
       throw error;

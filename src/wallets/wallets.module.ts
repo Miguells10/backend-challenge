@@ -4,6 +4,7 @@ import { MikroOrmWalletRepository } from '../infrastructure/persistence/reposito
 import { CreateWalletUseCase } from './create-wallet.use-case';
 import { GetWalletUseCase } from './get-wallet.use-case';
 import { ListWalletsUseCase } from './list-wallets.use-case';
+import { ReconcileWalletUseCase } from './reconcile-wallet.use-case';
 import { WALLET_REPOSITORY } from './wallet.repository';
 import { WalletsController } from './wallets.controller';
 
@@ -13,6 +14,7 @@ import { WalletsController } from './wallets.controller';
     CreateWalletUseCase,
     GetWalletUseCase,
     ListWalletsUseCase,
+    ReconcileWalletUseCase,
     MikroOrmWalletRepository,
     { provide: WALLET_REPOSITORY, useExisting: MikroOrmWalletRepository },
   ],
