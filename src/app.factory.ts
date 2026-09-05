@@ -1,13 +1,17 @@
 import 'reflect-metadata';
 
-import { type INestApplication, ValidationPipe } from '@nestjs/common';
+import { ConsoleLogger, type INestApplication, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 import { AppModule } from './app.module';
 
 export async function createApplication(): Promise<INestApplication> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  process.env.SERVICE_NAME ??= 'api';
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+    logger: new ConsoleLogger({ json: true }),
+  });
   app.enableShutdownHooks();
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }));
 

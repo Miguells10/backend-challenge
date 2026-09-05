@@ -60,7 +60,7 @@ describeDistributed('worker replicas', () => {
 
   test('keeps distinct wallets consistent while three worker containers consume the shared queue', async () => {
     await Promise.all(wallets().map((wallet, index) => sendBet(wallet, index)));
-    await waitForProcessedTransactions(3);
+    await waitForProcessedState(3);
     testEm.clear();
 
     const persistedWallets = await testEm.find(WalletEntitySchema, {});
@@ -102,14 +102,21 @@ describeDistributed('worker replicas', () => {
     }));
   }
 
-  async function waitForProcessedTransactions(expectedCount: number): Promise<void> {
+  async function waitForProcessedState(expectedCount: number): Promise<void> {
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
-      const count = await orm.em.fork().count(WagerTransactionEntitySchema, {});
-      if (count === expectedCount) return;
+      const em = orm.em.fork();
+      const [transactions, ledgerEntries, inboxMessages] = await Promise.all([
+        em.count(WagerTransactionEntitySchema, {}),
+        em.count(WalletLedgerEntryEntitySchema, {}),
+        em.count(InboxMessageEntitySchema, { consumerName: WagerTransactionSqsConsumer.consumerName }),
+      ]);
+      if (transactions === expectedCount && ledgerEntries === expectedCount && inboxMessages === expectedCount) {
+        return;
+      }
       await delay(100);
     }
-    throw new Error(`Expected ${expectedCount} transactions to be processed by worker replicas.`);
+    throw new Error(`Expected ${expectedCount} complete transaction, ledger, and inbox records from worker replicas.`);
   }
 });
 

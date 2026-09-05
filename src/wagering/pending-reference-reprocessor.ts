@@ -1,11 +1,14 @@
 import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 
 import { ProcessWagerTransactionUseCase } from '../application/wagering/process-wager-transaction.use-case';
 import {
   PENDING_REFERENCE_RETRY_POLICY,
   type PendingReferenceRetryPolicy,
 } from '../config/pending-reference-retry-policy';
+import { WagerTransactionStatus } from '../domain/wagering/wager-transaction';
+import { MetricsService } from '../observability/metrics.service';
+import { StructuredLogger } from '../observability/structured-logger.service';
 
 interface PendingReferenceRow {
   id: string;
@@ -21,6 +24,8 @@ export class PendingReferenceReprocessor {
     private readonly processWagerTransaction: ProcessWagerTransactionUseCase,
     @Inject(PENDING_REFERENCE_RETRY_POLICY)
     private readonly retryPolicy: PendingReferenceRetryPolicy,
+    @Optional() private readonly metrics?: MetricsService,
+    @Optional() private readonly logger?: StructuredLogger,
   ) {}
 
   public async reprocessDue(now: Date, limit = this.retryPolicy.batchSize): Promise<number> {
@@ -52,12 +57,22 @@ export class PendingReferenceReprocessor {
 
     const resolved = await this.processWagerTransaction.reprocessPendingReferenceInTransaction(em, pending.id, now);
     if (resolved) {
+      this.logger?.info('pending_reference_handled', {
+        correlationId: pending.id,
+        transactionId: pending.id,
+      });
       return 'handled';
     }
 
     const attempts = pending.referenceAttempts + 1;
     if (attempts >= this.retryPolicy.maxAttempts) {
       await this.processWagerTransaction.rejectPendingReferenceInTransaction(em, pending.id, attempts);
+      this.metrics?.recordTransaction(WagerTransactionStatus.Rejected, 'pending-reference');
+      this.logger?.warn('pending_reference_exhausted', {
+        correlationId: pending.id,
+        transactionId: pending.id,
+        attempt: attempts,
+      });
       return 'handled';
     }
 
@@ -71,6 +86,12 @@ export class PendingReferenceReprocessor {
       'run',
       em.getTransactionContext(),
     );
+    this.metrics?.recordRetry('pending-reference');
+    this.logger?.warn('pending_reference_retry_scheduled', {
+      correlationId: pending.id,
+      transactionId: pending.id,
+      attempt: attempts,
+    });
     return 'rescheduled';
   }
 

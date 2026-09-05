@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 
+import { ConsoleLogger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 
 import { AppModule } from './app.module';
@@ -7,12 +8,22 @@ import {
   PENDING_REFERENCE_RETRY_POLICY,
   type PendingReferenceRetryPolicy,
 } from './config/pending-reference-retry-policy';
+import { MetricsService } from './observability/metrics.service';
+import { startMetricsServer } from './observability/metrics-server';
+import { StructuredLogger } from './observability/structured-logger.service';
 import { PendingReferenceReprocessor } from './wagering/pending-reference-reprocessor';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
+  process.env.SERVICE_NAME ??= 'reference-reprocessor';
+  const app = await NestFactory.createApplicationContext(AppModule, {
+    bufferLogs: true,
+    logger: new ConsoleLogger({ json: true }),
+  });
   const reprocessor = app.get(PendingReferenceReprocessor);
   const retryPolicy = app.get<PendingReferenceRetryPolicy>(PENDING_REFERENCE_RETRY_POLICY);
+  const metrics = app.get(MetricsService);
+  const logger = app.get(StructuredLogger);
+  const metricsServer = startMetricsServer(metrics, logger);
   let stopping = false;
   const stop = (): void => {
     stopping = true;
@@ -28,11 +39,13 @@ async function bootstrap(): Promise<void> {
         await delay(retryPolicy.pollIntervalMs);
       }
     } catch (error) {
-      console.error(JSON.stringify({ event: 'pending_reference_reprocessor_error', message: errorMessage(error) }));
+      metrics.recordRetry('pending-reference');
+      logger.error('pending_reference_reprocessor_error', { errorType: errorName(error) });
       await delay(retryPolicy.pollIntervalMs);
     }
   }
 
+  await metricsServer.stop();
   await app.close();
 }
 
@@ -40,8 +53,8 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unknown pending-reference reprocessor error.';
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : 'UnknownError';
 }
 
 void bootstrap();

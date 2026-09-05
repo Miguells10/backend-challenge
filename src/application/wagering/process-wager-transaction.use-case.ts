@@ -1,6 +1,6 @@
 import { LockMode } from '@mikro-orm/core';
 import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 
 import {
   PENDING_REFERENCE_RETRY_POLICY,
@@ -38,6 +38,8 @@ import {
   WagerTransactionEntitySchema,
   type WagerTransactionEntity,
 } from '../../infrastructure/persistence/entities/wager-transaction.entity';
+import { MetricsService } from '../../observability/metrics.service';
+import { StructuredLogger } from '../../observability/structured-logger.service';
 
 export interface ProcessWagerTransactionCommand {
   id: string;
@@ -83,17 +85,59 @@ export class ProcessWagerTransactionUseCase {
     private readonly orm: MikroORM,
     @Inject(PENDING_REFERENCE_RETRY_POLICY)
     private readonly pendingReferenceRetryPolicy: PendingReferenceRetryPolicy,
+    @Optional() private readonly metrics?: MetricsService,
+    @Optional() private readonly logger?: StructuredLogger,
   ) {}
 
   public async execute(command: ProcessWagerTransactionCommand): Promise<ProcessWagerTransactionResult> {
-    return this.orm.em.fork().transactional((em) => this.executeInTransaction(em, command), { clear: true });
+    return this.observeProcessing(command, 'http', () =>
+      this.orm.em.fork().transactional((em) => this.process(em, command), { clear: true }));
   }
 
   public async executeInTransaction(
     em: EntityManager,
     command: ProcessWagerTransactionCommand,
   ): Promise<ProcessWagerTransactionResult> {
-    return this.process(em, command);
+    return this.observeProcessing(command, 'sqs', () => this.process(em, command));
+  }
+
+  private async observeProcessing(
+    command: ProcessWagerTransactionCommand,
+    source: 'http' | 'sqs',
+    operation: () => Promise<ProcessWagerTransactionResult>,
+  ): Promise<ProcessWagerTransactionResult> {
+    const startedAt = performance.now();
+    try {
+      const result = await operation();
+      if (result.idempotentReplay) {
+        this.metrics?.recordDuplicate(source);
+      } else {
+        this.metrics?.recordTransaction(result.status, source);
+      }
+      this.logger?.info(result.idempotentReplay ? 'wager_transaction_replayed' : 'wager_transaction_processed', {
+        correlationId: command.id,
+        transactionId: result.transactionId,
+        walletId: command.walletId,
+        providerId: command.providerId,
+        status: result.status,
+        source,
+      });
+      return result;
+    } catch (error) {
+      if (isDatabaseLockConflict(error)) {
+        this.metrics?.recordLockConflict('wallet');
+      }
+      this.logger?.error('wager_transaction_failed', {
+        correlationId: command.id,
+        walletId: command.walletId,
+        providerId: command.providerId,
+        source,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+      });
+      throw error;
+    } finally {
+      this.metrics?.observeProcessingLatency(source, (performance.now() - startedAt) / 1_000);
+    }
   }
 
   public async reprocessPendingReferenceInTransaction(
@@ -499,4 +543,15 @@ export class ProcessWagerTransactionUseCase {
       publishedAt: message.publishedAt,
     });
   }
+}
+
+function isDatabaseLockConflict(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  const code = error.code;
+  if (code === '40P01' || code === '55P03' || code === '40001') return true;
+  return isDatabaseLockConflict(error.cause) || isDatabaseLockConflict(error.driverException);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

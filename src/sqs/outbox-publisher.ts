@@ -1,8 +1,10 @@
 import { SendMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 
 import { OutboxMessage, type OutboxMessageState } from '../domain/messaging/outbox-message';
+import { MetricsService } from '../observability/metrics.service';
+import { StructuredLogger } from '../observability/structured-logger.service';
 
 import { SQS_CLIENT } from './sqs.constants';
 
@@ -15,6 +17,8 @@ export class OutboxPublisher {
   public constructor(
     private readonly orm: MikroORM,
     @Inject(SQS_CLIENT) private readonly sqsClient: SQSClient,
+    @Optional() private readonly metrics?: MetricsService,
+    @Optional() private readonly logger?: StructuredLogger,
   ) {
     this.queueUrl = requiredEnvironment('WAGER_EVENTS_QUEUE_URL');
   }
@@ -29,6 +33,8 @@ export class OutboxPublisher {
       }
       published += 1;
     }
+
+    await this.refreshOutboxLag();
 
     return published;
   }
@@ -46,8 +52,15 @@ export class OutboxPublisher {
     try {
       await this.send(message);
       message.markPublished(new Date());
-    } catch {
+      this.logger?.info('outbox_message_published', this.logContext(message));
+    } catch (error) {
       message.scheduleRetry(new Date());
+      this.metrics?.recordRetry('outbox');
+      this.logger?.warn('outbox_message_retry_scheduled', {
+        ...this.logContext(message),
+        attempt: message.attempts,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+      });
     }
 
     await this.updateMessage(em, message);
@@ -104,6 +117,33 @@ export class OutboxPublisher {
       'run',
       em.getTransactionContext(),
     );
+  }
+
+  private async refreshOutboxLag(): Promise<void> {
+    if (this.metrics === undefined) return;
+    const rows = await this.orm.em.fork().getConnection().execute<Array<{ oldest: Date | string | null }>>(
+      'select min("occurred_at") as "oldest" from "outbox_messages" where "published_at" is null',
+    );
+    const oldest = rows[0]?.oldest;
+    this.metrics.setOutboxLag(oldest === null || oldest === undefined
+      ? 0
+      : (Date.now() - new Date(oldest).getTime()) / 1_000);
+  }
+
+  private logContext(message: OutboxMessage): {
+    correlationId: string;
+    outboxMessageId: string;
+    eventType: string;
+    transactionId?: string;
+    walletId?: string;
+  } {
+    return {
+      correlationId: message.payload.correlationId,
+      outboxMessageId: message.id,
+      eventType: message.eventType,
+      transactionId: message.eventType.startsWith('WagerTransaction') ? message.aggregateId : undefined,
+      walletId: message.eventType === 'WalletBalanceChanged' ? message.aggregateId : undefined,
+    };
   }
 }
 

@@ -57,6 +57,8 @@ describeIntegration('HTTP API', () => {
       method: 'POST',
     }));
     const walletAfterReconciliation = await json(await fetch(`${baseUrl}/wallets/${wallet.body.id}`));
+    const metricsResponse = await fetch(`${baseUrl}/metrics`);
+    const metrics = await metricsResponse.text();
 
     expect(wager.response.status).toBe(200);
     expect(wager.body.balance.amount).toBe('75.00');
@@ -77,6 +79,14 @@ describeIntegration('HTTP API', () => {
       checkedEntries: 2,
     });
     expect(walletAfterReconciliation.body).toEqual(walletRead.body);
+    expect(metricsResponse.status).toBe(200);
+    expect(metricsResponse.headers.get('content-type')).toContain('text/plain');
+    expect(metrics).toContain('# HELP wagering_transactions_total');
+    expect(metrics).toContain('status="PROCESSED"');
+    expect(metrics).toContain('# HELP wagering_idempotency_duplicates_total');
+    expect(metrics).toContain('source="http"');
+    expect(metrics).toContain('# HELP wagering_processing_duration_seconds');
+    expect(metrics).toContain('# HELP wagering_outbox_lag_seconds');
   });
 
   test('returns a conflict when the player already has a wallet in that currency', async () => {
@@ -217,6 +227,7 @@ describeIntegration('HTTP API', () => {
       description: 'Identificador único da operação; reutilize-o somente ao repetir a mesma requisição.',
       schema: { type: 'string', example: 'demo-bet-001' },
     }]);
+    expect(swagger.body.paths['/metrics'].get.responses['200']).toBeDefined();
   });
 });
 
@@ -320,6 +331,9 @@ interface SwaggerDocument {
           schema: { type: string; example: string };
         }>;
       };
+    };
+    '/metrics': {
+      get: { responses: Record<string, unknown> };
     };
   };
 }

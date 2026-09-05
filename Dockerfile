@@ -10,5 +10,5 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-EXPOSE 3000
+EXPOSE 3000 9464
 CMD ["bun", "run", "start"]

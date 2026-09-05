@@ -1,17 +1,19 @@
 import {
   DeleteMessageCommand,
+  GetQueueAttributesCommand,
   ReceiveMessageCommand,
   SendMessageCommand,
   type Message,
   type SQSClient,
 } from '@aws-sdk/client-sqs';
 import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 
 import { canonicalPayloadHash } from '../application/idempotency/canonical-payload-hash';
 import {
   ProcessWagerTransactionUseCase,
   type ProcessWagerTransactionCommand,
+  type ProcessWagerTransactionResult,
 } from '../application/wagering/process-wager-transaction.use-case';
 import { InboxMessage } from '../domain/messaging/inbox-message';
 import { Money, MoneyValidationError, type MoneyProps } from '../domain/money/money';
@@ -20,6 +22,8 @@ import {
   WagerTransactionKind,
 } from '../domain/wagering/wager-transaction';
 import { InboxMessageEntitySchema, type InboxMessageEntity } from '../infrastructure/persistence/entities/inbox-message.entity';
+import { MetricsService } from '../observability/metrics.service';
+import { StructuredLogger } from '../observability/structured-logger.service';
 
 import { SQS_CLIENT } from './sqs.constants';
 
@@ -41,6 +45,11 @@ interface WagerTransactionRequestedMessage {
   };
 }
 
+interface CommittedMessageResult {
+  duplicate: boolean;
+  transaction?: ProcessWagerTransactionResult;
+}
+
 export class InvalidSqsWagerMessageError extends Error {
   public constructor(message: string) {
     super(message);
@@ -59,6 +68,8 @@ export class WagerTransactionSqsConsumer {
     private readonly orm: MikroORM,
     private readonly processWagerTransaction: ProcessWagerTransactionUseCase,
     @Inject(SQS_CLIENT) private readonly sqsClient: SQSClient,
+    @Optional() private readonly metrics?: MetricsService,
+    @Optional() private readonly logger?: StructuredLogger,
   ) {
     this.queueUrl = requiredEnvironment('WAGER_TRANSACTIONS_QUEUE_URL');
     this.deadLetterQueueUrl = requiredEnvironment('WAGER_TRANSACTIONS_DLQ_URL');
@@ -70,10 +81,12 @@ export class WagerTransactionSqsConsumer {
       MaxNumberOfMessages: 10,
       WaitTimeSeconds: 1,
       VisibilityTimeout: 30,
+      MessageSystemAttributeNames: ['ApproximateReceiveCount'],
     }));
     const messages = response.Messages ?? [];
 
     await Promise.all(messages.map((message) => this.consume(message)));
+    await this.refreshDeadLetterQueueSize();
     return messages.length;
   }
 
@@ -85,7 +98,30 @@ export class WagerTransactionSqsConsumer {
 
     try {
       const requested = parseRequestedMessage(message.Body);
-      await this.commitMessage(requested);
+      const receiveCount = Number(message.Attributes?.ApproximateReceiveCount ?? '1');
+      if (receiveCount > 1) {
+        this.metrics?.recordRetry('sqs');
+        this.logger?.warn('wager_message_redelivered', {
+          correlationId: requested.messageId,
+          messageId: requested.messageId,
+          walletId: requested.data.walletId,
+          providerId: requested.data.providerId,
+          receiveCount,
+        });
+      }
+
+      const committed = await this.commitMessage(requested);
+      if (committed.duplicate && committed.transaction === undefined) {
+        this.metrics?.recordDuplicate('sqs');
+      }
+      this.logger?.info(committed.duplicate ? 'wager_message_duplicate' : 'wager_message_committed', {
+        correlationId: requested.messageId,
+        messageId: requested.messageId,
+        transactionId: committed.transaction?.transactionId,
+        walletId: requested.data.walletId,
+        providerId: requested.data.providerId,
+        status: committed.transaction?.status,
+      });
     } catch (error) {
       if (!(error instanceof InvalidSqsWagerMessageError)) {
         throw error;
@@ -121,16 +157,17 @@ export class WagerTransactionSqsConsumer {
         sourceMessageId: { DataType: 'String', StringValue: message.MessageId ?? 'unknown' },
       },
     }));
-    console.error(JSON.stringify({
-      event: 'wager_message_moved_to_dlq',
+    this.metrics?.recordDeadLetter('invalid_message');
+    this.logger?.error('wager_message_moved_to_dlq', {
+      correlationId: message.MessageId,
       messageId: message.MessageId,
       failureCode: 'INVALID_WAGER_MESSAGE',
-    }));
+    });
   }
 
-  private async commitMessage(requested: WagerTransactionRequestedMessage): Promise<void> {
+  private async commitMessage(requested: WagerTransactionRequestedMessage): Promise<CommittedMessageResult> {
     try {
-      await this.orm.em.fork().transactional(
+      return await this.orm.em.fork().transactional(
         (em) => this.persistInboxAndProcessWager(em, requested),
         { clear: true },
       );
@@ -138,20 +175,21 @@ export class WagerTransactionSqsConsumer {
       if (!isUniqueConstraintViolation(error) || !(await this.wasAlreadyProcessed(requested.messageId))) {
         throw error;
       }
+      return { duplicate: true };
     }
   }
 
   private async persistInboxAndProcessWager(
     em: EntityManager,
     requested: WagerTransactionRequestedMessage,
-  ): Promise<void> {
+  ): Promise<CommittedMessageResult> {
     const existing = await em.findOne(InboxMessageEntitySchema, {
       consumerName: WagerTransactionSqsConsumer.consumerName,
       messageId: requested.messageId,
     });
     if (existing !== null) {
       this.assertProcessed(existing);
-      return;
+      return { duplicate: true };
     }
 
     const inbox = InboxMessage.receive({
@@ -171,10 +209,11 @@ export class WagerTransactionSqsConsumer {
     em.persist(inboxEntity);
     await em.flush();
 
-    await this.processWagerTransaction.executeInTransaction(em, toCommand(requested));
+    const transaction = await this.processWagerTransaction.executeInTransaction(em, toCommand(requested));
     inbox.markProcessed(new Date());
     inboxEntity.processedAt = inbox.processedAt;
     await em.flush();
+    return { duplicate: transaction.idempotentReplay, transaction };
   }
 
   private async wasAlreadyProcessed(messageId: string): Promise<boolean> {
@@ -184,6 +223,21 @@ export class WagerTransactionSqsConsumer {
       messageId,
     });
     return existing?.processedAt !== undefined;
+  }
+
+  private async refreshDeadLetterQueueSize(): Promise<void> {
+    if (this.metrics === undefined) return;
+    try {
+      const response = await this.sqsClient.send(new GetQueueAttributesCommand({
+        QueueUrl: this.deadLetterQueueUrl,
+        AttributeNames: ['ApproximateNumberOfMessages'],
+      }));
+      this.metrics.setDeadLetterQueueSize(Number(response.Attributes?.ApproximateNumberOfMessages ?? '0'));
+    } catch (error) {
+      this.logger?.warn('dlq_metric_refresh_failed', {
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
   }
 
   private assertProcessed(message: InboxMessageEntity): void {

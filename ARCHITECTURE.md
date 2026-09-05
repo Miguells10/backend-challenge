@@ -286,7 +286,7 @@ Executar o consumer como processo separado (`bun run start:worker`), escalável 
 - Se o processo cair antes do commit, SQS redeliverá a mensagem e nenhum efeito financeiro terá sido persistido.
 - Se cair depois do commit e antes do ack, SQS redeliverá, a inbox impedirá um segundo débito e o novo worker apenas dará ack.
 - Erros permanentes de payload são encaminhados imediatamente para a DLQ; falhas de infraestrutura continuam sem ack para que o SQS tente novamente e aplique sua redrive policy ao exceder o limite.
-- O worker não é iniciado por padrão no Compose. Ele pode ser escalado com `docker compose --profile worker up --scale worker=3` sem criar outro serviço de domínio.
+- O worker não é iniciado por padrão no Compose. Ele pode ser escalado com `docker compose --profile worker up --scale worker=3` sem criar outro serviço de domínio. O comando `bun run test:distributed-workers` sobe três réplicas isoladas, executa a prova de consistência e encerra os processos quando o teste termina.
 
 ## ADR-014: Publisher concorrente da outbox com SKIP LOCKED
 
@@ -370,7 +370,7 @@ Expor uma API REST com criação e consulta de wallet, submissão de wagering e 
 
 - Uma BET enviada por HTTP ou SQS segue as mesmas regras de idempotência, lock e ledger.
 - `PENDING_REFERENCE` retorna `202 Accepted`; os demais resultados financeiros retornam o status de domínio no corpo da resposta.
-- Consultas expõem dados persistidos sem reexecutar regras de negócio. Paginação de ledger e reconciliação permanecem a próxima fatia da API.
+- Consultas expõem dados persistidos sem reexecutar regras de negócio. A reconciliação compara o saldo materializado com a soma do ledger sem corrigir divergências; paginação detalhada do ledger permanece uma evolução futura.
 
 ## ADR-018: DTOs HTTP, casos de uso de consulta e repositórios específicos
 
@@ -394,3 +394,26 @@ DTOs ficam em arquivos próprios por contrato HTTP. Consultas de wallet e transa
 - Uma troca de biblioteca de persistência fica limitada aos adaptadores de repositório das consultas.
 - Não há `BaseRepository` genérico: cada interface representa apenas as consultas que seu módulo realmente precisa.
 - O acoplamento técnico residual dos casos de uso de escrita ao `EntityManager` é intencional neste desafio, pois preserva a atomicidade entre saldo, ledger, inbox/outbox e locks.
+
+## ADR-019: Logs JSON e métricas Prometheus por processo
+
+### Status
+
+Aceita.
+
+### Contexto
+
+A API e os workers rodam em processos independentes. Logs em texto livre e métricas apenas na memória da API não permitem relacionar uma requisição HTTP, uma mensagem SQS e a transação financeira resultante, nem diagnosticar retries, DLQ, locks ou atraso da outbox.
+
+### Decisão
+
+Emitir logs JSON de negócio com nome do serviço e da instância, além de `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId` quando esses identificadores existirem no ponto observado. Valores monetários, corpos de mensagens e payloads completos não são registrados. Os logs internos do Nest também usam seu formato JSON nativo.
+
+Cada processo mantém um registro Prometheus próprio. A API o expõe em `GET /metrics`; consumer, publisher e reprocessador abrem a mesma rota em sua porta interna `METRICS_PORT`. As séries cobrem resultados por status, duplicatas idempotentes, retries por componente, entradas e tamanho aproximado da DLQ, conflitos de lock, atraso da outbox, divergências de reconciliação e histograma de latência do processamento.
+
+### Consequências
+
+- As métricas de uma réplica reiniciam com o processo; em produção, Prometheus deve descobrir e consultar cada instância e fazer a agregação temporal.
+- `service` e `instance` distinguem API, workers e publishers sem transformar IDs de wallet ou transação em labels de alta cardinalidade.
+- A consulta do tamanho da DLQ é aproximada, como definido pelo SQS, e falhas nessa medição não interrompem o processamento financeiro.
+- O desafio não inclui um servidor Prometheus ou dashboard: a aplicação entrega o formato e os endpoints prontos para coleta externa.
