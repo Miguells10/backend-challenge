@@ -8,6 +8,7 @@ export interface WalletSnapshot {
 
 export interface WalletRepository {
   findById(walletId: string): Promise<WalletSnapshot | undefined>;
+  findMany(limit: number): Promise<WalletSnapshot[]>;
 }
 
 export const WALLET_REPOSITORY = Symbol('WALLET_REPOSITORY');

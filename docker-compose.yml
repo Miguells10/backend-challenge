@@ -13,6 +13,21 @@ services:
       timeout: 3s
       retries: 20
 
+  postgres-test:
+    image: postgres:17-alpine
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: wagering_test
+      POSTGRES_USER: wagering
+      POSTGRES_PASSWORD: wagering
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wagering -d wagering_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   localstack:
     image: localstack/localstack:4.8
     environment:

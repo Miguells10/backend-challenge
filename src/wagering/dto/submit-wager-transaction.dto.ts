@@ -1,9 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
 
 import { MoneyDto } from '../../http/dto/money.dto';
-import { WagerTransactionKind } from '../../domain/wagering/wager-transaction';
+import {
+  EXTERNAL_WAGER_TRANSACTION_KINDS,
+  WagerTransactionKind,
+} from '../../domain/wagering/wager-transaction';
 
 export class SubmitWagerTransactionDto {
   @ApiProperty()
@@ -30,8 +33,8 @@ export class SubmitWagerTransactionDto {
   @IsString()
   public gameId!: string;
 
-  @ApiProperty({ enum: WagerTransactionKind })
-  @IsEnum(WagerTransactionKind)
+  @ApiProperty({ enum: EXTERNAL_WAGER_TRANSACTION_KINDS, example: WagerTransactionKind.Bet })
+  @IsIn(EXTERNAL_WAGER_TRANSACTION_KINDS)
   public kind!: WagerTransactionKind;
 
   @ApiProperty({ type: MoneyDto })

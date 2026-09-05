@@ -17,7 +17,9 @@ import {
 } from '../../domain/messaging/wager-events';
 import { InsufficientFundsError, Wallet } from '../../domain/wallet/wallet';
 import {
+  isExternalWagerTransactionKind,
   InvalidTransactionReferenceError,
+  InvalidWagerTransactionError,
   WagerFailureCode,
   WagerTransaction,
   WagerTransactionKind,
@@ -159,6 +161,10 @@ export class ProcessWagerTransactionUseCase {
     em: EntityManager,
     command: ProcessWagerTransactionCommand,
   ): Promise<ProcessWagerTransactionResult> {
+    if (!isExternalWagerTransactionKind(command.kind)) {
+      throw new InvalidWagerTransactionError('OPENING transactions can only be created while opening a wallet.');
+    }
+
     const existing = await em.findOne(WagerTransactionEntitySchema, { idempotencyKey: command.idempotencyKey });
     if (existing !== null) {
       return this.replay(existing, command.payloadHash);

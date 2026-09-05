@@ -15,7 +15,10 @@ import {
 } from '../application/wagering/process-wager-transaction.use-case';
 import { InboxMessage } from '../domain/messaging/inbox-message';
 import { Money, MoneyValidationError, type MoneyProps } from '../domain/money/money';
-import { WagerTransactionKind } from '../domain/wagering/wager-transaction';
+import {
+  isExternalWagerTransactionKind,
+  WagerTransactionKind,
+} from '../domain/wagering/wager-transaction';
 import { InboxMessageEntitySchema, type InboxMessageEntity } from '../infrastructure/persistence/entities/inbox-message.entity';
 
 import { SQS_CLIENT } from './sqs.constants';
@@ -273,11 +276,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseKind(value: string): WagerTransactionKind {
-  if (!Object.values(WagerTransactionKind).includes(value as WagerTransactionKind)) {
+  if (!isExternalWagerTransactionKind(value)) {
     throw new InvalidSqsWagerMessageError(`Unsupported wager transaction kind ${value}.`);
   }
 
-  return value as WagerTransactionKind;
+  return value;
 }
 
 function isUniqueConstraintViolation(error: unknown): boolean {

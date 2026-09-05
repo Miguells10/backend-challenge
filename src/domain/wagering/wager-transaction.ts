@@ -10,6 +10,18 @@ export enum WagerTransactionKind {
   Rollback = 'ROLLBACK',
 }
 
+export const EXTERNAL_WAGER_TRANSACTION_KINDS = [
+  WagerTransactionKind.Bet,
+  WagerTransactionKind.Win,
+  WagerTransactionKind.Loss,
+  WagerTransactionKind.Refund,
+  WagerTransactionKind.Rollback,
+] as const;
+
+export function isExternalWagerTransactionKind(kind: string): kind is WagerTransactionKind {
+  return EXTERNAL_WAGER_TRANSACTION_KINDS.includes(kind as (typeof EXTERNAL_WAGER_TRANSACTION_KINDS)[number]);
+}
+
 export enum WagerTransactionStatus {
   Pending = 'PENDING',
   PendingReference = 'PENDING_REFERENCE',
