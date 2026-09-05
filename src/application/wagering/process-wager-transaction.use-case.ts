@@ -176,6 +176,12 @@ export class ProcessWagerTransactionUseCase {
       return true;
     }
 
+    if (await this.hasProcessedReversalOfSameKind(em, transaction, reference)) {
+      transaction.reject(WagerFailureCode.ReversalAlreadyProcessed);
+      await this.persistTransaction(em, transaction, wallet.balance, transactionEntity);
+      return true;
+    }
+
     await this.applyBalanceChange(em, transaction, wallet, walletEntity, reference, occurredAt, transactionEntity);
     return true;
   }
@@ -249,6 +255,11 @@ export class ProcessWagerTransactionUseCase {
 
     if (reference !== undefined && !this.isValidReference(transaction, reference)) {
       transaction.reject(WagerFailureCode.InvalidReference);
+      return this.persistTransaction(em, transaction, wallet.balance);
+    }
+
+    if (reference !== undefined && await this.hasProcessedReversalOfSameKind(em, transaction, reference)) {
+      transaction.reject(WagerFailureCode.ReversalAlreadyProcessed);
       return this.persistTransaction(em, transaction, wallet.balance);
     }
 
@@ -343,6 +354,22 @@ export class ProcessWagerTransactionUseCase {
       }
       throw error;
     }
+  }
+
+  private async hasProcessedReversalOfSameKind(
+    em: EntityManager,
+    transaction: WagerTransaction,
+    reference: WagerTransaction,
+  ): Promise<boolean> {
+    if (!transaction.requiresReference()) {
+      return false;
+    }
+
+    return (await em.count(WagerTransactionEntitySchema, {
+      referenceTransactionId: reference.id,
+      kind: transaction.kind,
+      status: WagerTransactionStatus.Processed,
+    })) > 0;
   }
 
   private async persistTransaction(

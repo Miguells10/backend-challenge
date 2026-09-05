@@ -129,6 +129,8 @@ Uma transação válida, porém rejeitada por regra de negócio, é persistida p
 - operações da mesma wallet usam `FOR UPDATE`, enquanto wallets diferentes continuam independentes;
 - saldo, transação, ledger, inbox e outbox são persistidos na mesma transação SQL quando aplicável;
 - a idempotência é banco de dados, não memória do processo;
+- o `payloadHash` usa SHA-256 de um JSON canônico (chaves ordenadas) contendo somente `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money` e a referência opcional; `Idempotency-Key` e metadados de transporte não entram no hash;
+- para uma mesma transação de referência, só pode existir uma reversão `REFUND` e uma `ROLLBACK` processadas; a regra é aplicada pelo caso de uso e por índice parcial no PostgreSQL;
 - a inbox impede um segundo efeito financeiro após redelivery SQS;
 - o ack SQS acontece após o commit;
 - a outbox só é publicada depois do commit e pode ser retomada por outro publisher;
@@ -217,7 +219,7 @@ Cada processo possui sua própria rota `/metrics`. A API publica em `3000`; work
 
 ## Limitações e evoluções futuras
 
-- autenticação não foi implementada porque não pontua no desafio; em produção seria integrada a um IdP OIDC, sem usuários ou senhas próprios;
+- autenticação não foi implementada porque não pontua no desafio; os endpoints já dependem de uma `ProviderIdentityPort` com adaptador no-op, que em produção seria substituído por um adaptador OIDC sem alterar os casos de uso financeiros;
 - OpenTelemetry e Jaeger não foram adicionados; as métricas, Prometheus e Grafana já permitem observação por métricas, enquanto tracing distribuído continua como evolução futura;
 - o cursor do ledger é estável para paginação, mas não é um token criptograficamente assinado;
 - o lock pessimista prioriza correção da hot wallet; para volume muito alto, a estratégia de claim/lease da outbox e particionamento podem evoluir.

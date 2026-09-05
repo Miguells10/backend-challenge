@@ -105,7 +105,7 @@ A autenticação explicitamente não pontua e não deve reduzir o tempo disponí
 
 ### Decisão
 
-Não criar um sistema local de usuário e senha. Introduzir uma `ProviderIdentityPort` quando os endpoints de wagering forem implementados, inicialmente atendida por um adaptador no-op. Um adaptador de produção validaria a identidade do provedor por meio de um Identity Provider OIDC externo, usando client credentials.
+Não criar um sistema local de usuário e senha. Os endpoints de wagering dependem de uma `ProviderIdentityPort`, atualmente atendida por um adaptador no-op. Um adaptador de produção validaria a identidade do provedor por meio de um Identity Provider OIDC externo, usando client credentials.
 
 ### Consequências
 
@@ -188,13 +188,14 @@ Uma mensagem de provedor não é apenas uma alteração de saldo: ela possui ide
 
 ### Decisão
 
-Modelar `WagerTransaction` como a fonte de verdade para o ciclo de vida de `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`. Toda transação nasce em `PENDING`; uma reversão cuja referência ainda não chegou vai para `PENDING_REFERENCE`; `PROCESSED`, `REJECTED` e `FAILED` são terminais. `REFUND` e `ROLLBACK` exigem referência; `WIN` pode opcionalmente apontar para a `BET` da mesma rodada. A referência precisa pertencer ao mesmo provider, jogador, wallet, rodada, moeda e valor, e já estar processada.
+Modelar `WagerTransaction` como a fonte de verdade para o ciclo de vida de `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`. Toda transação nasce em `PENDING`; uma reversão cuja referência ainda não chegou vai para `PENDING_REFERENCE`; `PROCESSED`, `REJECTED` e `FAILED` são terminais. `REFUND` e `ROLLBACK` exigem referência; `WIN` pode opcionalmente apontar para a `BET` da mesma rodada. A referência precisa pertencer ao mesmo provider, jogador, wallet, rodada, moeda e valor, e já estar processada. Uma referência só pode ter uma reversão processada de cada tipo (`REFUND` ou `ROLLBACK`).
 
 ### Consequências
 
 - `BET` gera débito; `WIN`, `REFUND` e `OPENING` geram crédito; `LOSS` não altera saldo; `ROLLBACK` usa a direção inversa da transação referenciada.
 - As regras de tipo de referência impedem refund de uma vitória e rollback de uma operação sem efeito financeiro.
 - A classe conhece o `payloadHash`, mas a garantia de idempotência será concluída com índice único e consulta persistente no caso de uso.
+- O hash é SHA-256 do JSON canônico com chaves ordenadas dos campos de negócio. `Idempotency-Key`, IDs internos, timestamp e metadados do transporte são excluídos, para que HTTP e SQS tenham a mesma semântica.
 - `OPENING` permanece permitido no domínio para a criação interna da wallet; os adaptadores HTTP e SQS o bloquearão como entrada externa.
 
 ## ADR-010: Schema financeiro como última linha de defesa
@@ -209,7 +210,7 @@ Validações no domínio tornam regras legíveis, mas não protegem contra bugs 
 
 ### Decisão
 
-Mapear a persistência com `EntitySchema` do MikroORM, mantendo classes de domínio livres de decorators. A migration inicial cria `wallets`, `wager_transactions` e `wallet_ledger_entries` com valores `numeric(18,2)`, timestamps com timezone, chaves estrangeiras e índices orientados às consultas previstas. O banco aplica unicidade de wallet e idempotência, contexto comum entre wallet/transação/ledger, valores e saldos válidos, e aritmética do ledger. Triggers bloqueiam `UPDATE` e `DELETE` em lançamentos do ledger e exigem uma transação processada que afete saldo, com direção coerente para os tipos não ambíguos.
+Mapear a persistência com `EntitySchema` do MikroORM, mantendo classes de domínio livres de decorators. A migration inicial cria `wallets`, `wager_transactions` e `wallet_ledger_entries` com valores `numeric(18,2)`, timestamps com timezone, chaves estrangeiras e índices orientados às consultas previstas. O banco aplica unicidade de wallet e idempotência, contexto comum entre wallet/transação/ledger, valores e saldos válidos, e aritmética do ledger. Triggers bloqueiam `UPDATE` e `DELETE` em lançamentos do ledger e exigem uma transação processada que afete saldo, com direção coerente para os tipos não ambíguos. Um índice parcial garante que a mesma referência não tenha duas reversões processadas do mesmo tipo.
 
 ### Consequências
 

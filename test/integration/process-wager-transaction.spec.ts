@@ -230,6 +230,47 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
     expect(ledgerEntries).toBe(0);
     expect(outboxMessages.map((message) => message.eventType)).toEqual(['WagerTransactionPendingReference']);
   });
+
+  test('processes only one refund for the same bet, even when requests race', async () => {
+    const bet = await useCase.execute(command({
+      id: '00000000-0000-0000-0000-000000000601',
+      externalTransactionId: 'bet-to-refund',
+      idempotencyKey: 'provider-1:bet-to-refund',
+      payloadHash: 'payload-hash-bet-to-refund',
+    }));
+
+    expect(bet.status).toBe(WagerTransactionStatus.Processed);
+
+    const results = await Promise.all([
+      useCase.execute(command({
+        id: '00000000-0000-0000-0000-000000000602',
+        kind: WagerTransactionKind.Refund,
+        externalTransactionId: 'refund-first',
+        idempotencyKey: 'provider-1:refund-first',
+        payloadHash: 'payload-hash-refund-first',
+        referenceExternalTransactionId: 'bet-to-refund',
+      })),
+      useCase.execute(command({
+        id: '00000000-0000-0000-0000-000000000603',
+        kind: WagerTransactionKind.Refund,
+        externalTransactionId: 'refund-second',
+        idempotencyKey: 'provider-1:refund-second',
+        payloadHash: 'payload-hash-refund-second',
+        referenceExternalTransactionId: 'bet-to-refund',
+      })),
+    ]);
+    testEm.clear();
+
+    const wallet = await testEm.findOneOrFail(WalletEntitySchema, WALLET_ID);
+    const ledgerEntries = await testEm.find(WalletLedgerEntryEntitySchema, { walletId: WALLET_ID });
+
+    expect(results.filter((result) => result.status === WagerTransactionStatus.Processed)).toHaveLength(1);
+    expect(results.filter((result) => result.status === WagerTransactionStatus.Rejected)).toHaveLength(1);
+    expect(results.find((result) => result.status === WagerTransactionStatus.Rejected)?.failureCode)
+      .toBe(WagerFailureCode.ReversalAlreadyProcessed);
+    expect(wallet.balanceAmount).toBe('100.00');
+    expect(ledgerEntries).toHaveLength(2);
+  });
 });
 
 function command(overrides: Partial<ProcessWagerTransactionCommand> = {}): ProcessWagerTransactionCommand {

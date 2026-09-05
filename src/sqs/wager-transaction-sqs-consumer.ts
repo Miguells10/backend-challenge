@@ -9,7 +9,7 @@ import {
 import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 
-import { canonicalPayloadHash } from '../application/idempotency/canonical-payload-hash';
+import { wagerTransactionPayloadHash } from '../application/idempotency/canonical-payload-hash';
 import {
   ProcessWagerTransactionUseCase,
   type ProcessWagerTransactionCommand,
@@ -196,7 +196,7 @@ export class WagerTransactionSqsConsumer {
       id: crypto.randomUUID(),
       messageId: requested.messageId,
       consumerName: WagerTransactionSqsConsumer.consumerName,
-      payloadHash: canonicalPayloadHash(requested.data),
+      payloadHash: wagerTransactionPayloadHash(requested.data),
       receivedAt: new Date(),
     });
     const inboxEntity = em.create(InboxMessageEntitySchema, {
@@ -259,7 +259,7 @@ function toCommand(message: WagerTransactionRequestedMessage): ProcessWagerTrans
     providerId: message.data.providerId,
     externalTransactionId: message.data.externalTransactionId,
     idempotencyKey: message.data.idempotencyKey,
-    payloadHash: canonicalPayloadHash(message.data),
+    payloadHash: wagerTransactionPayloadHash(message.data),
     walletId: message.data.walletId,
     playerId: message.data.playerId,
     roundId: message.data.roundId,

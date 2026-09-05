@@ -7,6 +7,7 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  Inject,
   NotFoundException,
   Param,
   Post,
@@ -25,7 +26,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 
-import { canonicalPayloadHash } from '../application/idempotency/canonical-payload-hash';
+import {
+  PROVIDER_IDENTITY_PORT,
+  type ProviderIdentityPort,
+} from '../application/identity/provider-identity.port';
+import { wagerTransactionPayloadHash } from '../application/idempotency/canonical-payload-hash';
 import { IdempotencyConflictError, ProcessWagerTransactionUseCase, WalletNotFoundError } from '../application/wagering/process-wager-transaction.use-case';
 import { CurrencyMismatchError, Money, MoneyValidationError } from '../domain/money/money';
 import {
@@ -43,6 +48,7 @@ export class WageringController {
   public constructor(
     private readonly processWager: ProcessWagerTransactionUseCase,
     private readonly getWagerTransaction: GetWagerTransactionUseCase,
+    @Inject(PROVIDER_IDENTITY_PORT) private readonly providerIdentity: ProviderIdentityPort,
   ) {}
 
   @Post('wagering/transactions')
@@ -69,11 +75,12 @@ export class WageringController {
     }
 
     try {
+      await this.providerIdentity.assertCanSubmit(dto.providerId);
       const result = await this.processWager.execute({
         id: crypto.randomUUID(),
         ...dto,
         idempotencyKey,
-        payloadHash: canonicalPayloadHash(dto),
+        payloadHash: wagerTransactionPayloadHash(dto),
         money: Money.from(dto.money),
         occurredAt: new Date(),
       });

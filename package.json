@@ -18,9 +18,9 @@
     "test:distributed-workers": "docker compose --profile distributed-test up --build --abort-on-container-exit --exit-code-from distributed-test-runner distributed-test-runner worker-test",
     "test:distributed-workers:run": "bun test --max-concurrency=1 test/distributed/worker-replicas.spec.ts",
     "test:load": "bun run scripts/load-test.ts",
-    "migration:create": "mikro-orm migration:create",
-    "migration:up": "mikro-orm migration:up",
-    "migration:down": "mikro-orm migration:down"
+    "migration:create": "bun ./node_modules/@mikro-orm/cli/cli.js migration:create",
+    "migration:up": "bun ./node_modules/@mikro-orm/cli/cli.js migration:up",
+    "migration:down": "bun ./node_modules/@mikro-orm/cli/cli.js migration:down"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "3.1125.0",

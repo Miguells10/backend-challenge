@@ -69,4 +69,48 @@ describeIntegration('PostgreSQL financial constraints', () => {
       [WALLET_ID],
     )).rejects.toThrow('wallet ledger entries are immutable');
   });
+
+  test('allows only one processed reversal of each kind for the same reference outside the application', async () => {
+    const reference = await testEm.getConnection().execute<{ id: string }[]>(
+      'select "id" from "wager_transactions" where "external_transaction_id" = ?',
+      ['bet-constraints-1'],
+    );
+    const referenceId = reference[0]?.id;
+    if (referenceId === undefined) throw new Error('Expected the processed bet reference.');
+
+    const insertProcessedRefund = (id: string, externalTransactionId: string, idempotencyKey: string) =>
+      testEm.getConnection().execute(
+        `insert into "wager_transactions" (
+          "id", "provider_id", "external_transaction_id", "idempotency_key", "payload_hash",
+          "wallet_id", "player_id", "round_id", "game_id", "kind", "amount", "currency",
+          "reference_external_transaction_id", "reference_transaction_id", "status", "result_balance_amount",
+          "reference_attempts", "created_at", "processed_at"
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'REFUND', 25.00, 'BRL', ?, ?, 'PROCESSED', 100.00, 0, now(), now())`,
+        [
+          id,
+          'provider-constraints',
+          externalTransactionId,
+          idempotencyKey,
+          `hash-${id}`,
+          WALLET_ID,
+          PLAYER_ID,
+          'round-constraints',
+          'game-constraints',
+          'bet-constraints-1',
+          referenceId,
+        ],
+      );
+
+    await insertProcessedRefund(
+      '00000000-0000-0000-0000-000000000504',
+      'refund-constraints-1',
+      'provider-constraints:refund-constraints-1',
+    );
+
+    await expect(insertProcessedRefund(
+      '00000000-0000-0000-0000-000000000505',
+      'refund-constraints-2',
+      'provider-constraints:refund-constraints-2',
+    )).rejects.toThrow('wager_transactions_processed_reversal_once_per_kind_unique');
+  });
 });

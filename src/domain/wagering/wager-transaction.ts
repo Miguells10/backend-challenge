@@ -34,6 +34,7 @@ export enum WagerFailureCode {
   InsufficientFunds = 'INSUFFICIENT_FUNDS',
   ReferenceNotFound = 'REFERENCE_NOT_FOUND',
   InvalidReference = 'INVALID_REFERENCE',
+  ReversalAlreadyProcessed = 'REVERSAL_ALREADY_PROCESSED',
   RollbackWouldOverdraw = 'ROLLBACK_WOULD_OVERDRAW',
 }
 
