@@ -104,6 +104,61 @@ describeIntegration('ProcessWagerTransactionUseCase', () => {
     expect(ledgerEntries).toBe(1);
   });
 
+  test('processes fifty concurrent copies of the same wager only once', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 50 }, () => useCase.execute(command())),
+    );
+    testEm.clear();
+
+    const wallet = await testEm.findOneOrFail(WalletEntitySchema, WALLET_ID);
+    const transactions = await testEm.count(WagerTransactionEntitySchema, { idempotencyKey: 'provider-1:external-1' });
+    const ledgerEntries = await testEm.count(WalletLedgerEntryEntitySchema, { walletId: WALLET_ID });
+
+    expect(results.filter((result) => !result.idempotentReplay)).toHaveLength(1);
+    expect(results.filter((result) => result.idempotentReplay)).toHaveLength(49);
+    expect(wallet.balanceAmount).toBe('75.00');
+    expect(wallet.version).toBe(2);
+    expect(transactions).toBe(1);
+    expect(ledgerEntries).toBe(1);
+  });
+
+  test('serializes competing debits and never persists a negative balance', async () => {
+    const results = await Promise.all([
+      useCase.execute(command({
+        id: '00000000-0000-0000-0000-000000000201',
+        externalTransactionId: 'competing-bet-1',
+        idempotencyKey: 'provider-1:competing-bet-1',
+        payloadHash: 'payload-hash-competing-1',
+        money: money('60.00'),
+      })),
+      useCase.execute(command({
+        id: '00000000-0000-0000-0000-000000000202',
+        externalTransactionId: 'competing-bet-2',
+        idempotencyKey: 'provider-1:competing-bet-2',
+        payloadHash: 'payload-hash-competing-2',
+        money: money('60.00'),
+      })),
+      useCase.execute(command({
+        id: '00000000-0000-0000-0000-000000000203',
+        externalTransactionId: 'competing-bet-3',
+        idempotencyKey: 'provider-1:competing-bet-3',
+        payloadHash: 'payload-hash-competing-3',
+        money: money('60.00'),
+      })),
+    ]);
+    testEm.clear();
+
+    const wallet = await testEm.findOneOrFail(WalletEntitySchema, WALLET_ID);
+    const ledgerEntries = await testEm.find(WalletLedgerEntryEntitySchema, { walletId: WALLET_ID });
+
+    expect(results.filter((result) => result.status === WagerTransactionStatus.Processed)).toHaveLength(1);
+    expect(results.filter((result) => result.status === WagerTransactionStatus.Rejected)).toHaveLength(2);
+    expect(wallet.balanceAmount).toBe('40.00');
+    expect(wallet.version).toBe(2);
+    expect(ledgerEntries).toHaveLength(1);
+    expect(ledgerEntries[0]?.balanceAfter).toBe('40.00');
+  });
+
   test('rejects reuse of an idempotency key with another payload', async () => {
     await useCase.execute(command());
 

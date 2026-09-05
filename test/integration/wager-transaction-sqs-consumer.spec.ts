@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import {
+  ChangeMessageVisibilityCommand,
   DeleteMessageCommand,
   ReceiveMessageCommand,
   SendMessageCommand,
@@ -71,6 +72,44 @@ describeIntegration('WagerTransactionSqsConsumer', () => {
     await consumer.pollOnce();
     await sendRequestedTransaction();
     await consumer.pollOnce();
+    testEm.clear();
+
+    const wallet = await testEm.findOneOrFail(WalletEntitySchema, WALLET_ID);
+    const inboxMessages = await testEm.count(InboxMessageEntitySchema, {
+      consumerName: WagerTransactionSqsConsumer.consumerName,
+      messageId: 'business-message-1',
+    });
+    const ledgerEntries = await testEm.count(WalletLedgerEntryEntitySchema, { walletId: WALLET_ID });
+
+    expect(wallet.balanceAmount).toBe('75.00');
+    expect(inboxMessages).toBe(1);
+    expect(ledgerEntries).toBe(1);
+  });
+
+  test('acknowledges a redelivery without a second debit when the previous worker committed before failing the ack', async () => {
+    await sendRequestedTransaction();
+    const sourceMessage = await receiveOne(sqsClient, QUEUE_URL, 1);
+    if (sourceMessage === undefined || sourceMessage.ReceiptHandle === undefined) {
+      throw new Error('Expected the source queue to return a message.');
+    }
+
+    const consumerThatFailsAck = new WagerTransactionSqsConsumer(
+      orm,
+      new ProcessWagerTransactionUseCase(orm, pendingReferenceRetryPolicyFromEnvironment({})),
+      failFirstDelete(sqsClient),
+    );
+    await expect(consumerThatFailsAck.consume(sourceMessage)).rejects.toThrow('Simulated ack failure.');
+
+    await sqsClient.send(new ChangeMessageVisibilityCommand({
+      QueueUrl: QUEUE_URL,
+      ReceiptHandle: sourceMessage.ReceiptHandle,
+      VisibilityTimeout: 0,
+    }));
+    const redeliveredMessage = await receiveOne(sqsClient, QUEUE_URL, 1);
+    if (redeliveredMessage === undefined) {
+      throw new Error('Expected the committed message to be redelivered.');
+    }
+    await consumer.consume(redeliveredMessage);
     testEm.clear();
 
     const wallet = await testEm.findOneOrFail(WalletEntitySchema, WALLET_ID);
@@ -164,8 +203,8 @@ async function drainQueue(sqsClient: SQSClient, queueUrl: string): Promise<void>
   }
 }
 
-async function receiveOne(sqsClient: SQSClient, queueUrl: string) {
-  return (await receiveMessages(sqsClient, queueUrl, 1))[0];
+async function receiveOne(sqsClient: SQSClient, queueUrl: string, waitTimeSeconds = 0) {
+  return (await receiveMessages(sqsClient, queueUrl, waitTimeSeconds))[0];
 }
 
 async function receiveMessages(sqsClient: SQSClient, queueUrl: string, waitTimeSeconds = 0) {
@@ -186,4 +225,18 @@ function requiredEnvironment(name: string): string {
   }
 
   return value;
+}
+
+function failFirstDelete(sqsClient: SQSClient): SQSClient {
+  let shouldFailDelete = true;
+
+  return {
+    send: async (command: unknown) => {
+      if (command instanceof DeleteMessageCommand && shouldFailDelete) {
+        shouldFailDelete = false;
+        throw new Error('Simulated ack failure.');
+      }
+      return sqsClient.send(command as never);
+    },
+  } as unknown as SQSClient;
 }
